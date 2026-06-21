@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import orjson
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from pydantic import RootModel
 
@@ -17,6 +17,7 @@ from app.platform.auth.middleware import verify_admin_key
 from app.platform.config.snapshot import config
 from app.platform.errors import AppError, ErrorKind, ValidationError
 from app.platform.logging.logger import logger, reload_file_logging
+from app.platform.request_logging import request_log_store
 from app.platform.storage import reconcile_local_media_cache_async
 
 if TYPE_CHECKING:
@@ -241,6 +242,20 @@ async def runtime_status():
                 "size": _directory.size,
                 "revision": _directory.revision,
                 "selection_strategy": strategy_name,
+            }
+        ),
+        media_type="application/json",
+    )
+
+
+@router.get("/request-logs", tags=[_TAG_ADMIN_SYSTEM])
+async def get_request_logs(limit: int = Query(200, ge=1, le=1000)):
+    return Response(
+        content=orjson.dumps(
+            {
+                "retention_days": request_log_store.retention_days,
+                "retained_dates": request_log_store.retained_dates(),
+                "items": await request_log_store.list(limit=limit),
             }
         ),
         media_type="application/json",

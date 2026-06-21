@@ -128,6 +128,7 @@
     }
   },
   "header": {
+    "requestLogs": "Journaux de Requêtes",
     "account": "Gestion des Comptes",
     "config": "Gestion de la Configuration",
     "cache": "Gestion du Cache",

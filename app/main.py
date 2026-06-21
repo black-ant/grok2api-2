@@ -30,6 +30,7 @@ from app.platform.config.snapshot import config as _config
 from app.platform.errors import AppError
 from app.platform.meta import get_project_version
 from app.platform.paths import data_path
+from app.platform.request_logging import RequestLogMiddleware
 from app.platform.storage import reconcile_local_media_cache_async
 
 
@@ -361,6 +362,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestLogMiddleware)
 
     # Ensure config is loaded on every request.
     @app.middleware("http")

@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.119%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Version](https://img.shields.io/badge/version-2.0.4.rc4-111827)](../grok2api-main/grok2api-main/pyproject.toml)
+[![Version](https://img.shields.io/badge/version-2.0.4.rc5-111827)](../grok2api-main/grok2api-main/pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-16a34a)](../LICENSE)
 [![Docker](https://img.shields.io/badge/ghcr.io-jiujiu532%2Fgrok2api-2496ED?logo=docker&logoColor=white)](https://github.com/jiujiu532/grok2api/pkgs/container/grok2api)
 [![中文](https://img.shields.io/badge/%E4%B8%AD%E6%96%87-DC2626?logo=bookstack&logoColor=white)](../README.md)

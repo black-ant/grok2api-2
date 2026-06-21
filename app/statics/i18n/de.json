@@ -128,6 +128,7 @@
     }
   },
   "header": {
+    "requestLogs": "Anfrageprotokolle",
     "account": "Kontoverwaltung",
     "config": "Konfigurationsverwaltung",
     "cache": "Cache-Verwaltung",

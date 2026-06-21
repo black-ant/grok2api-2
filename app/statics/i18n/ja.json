@@ -128,6 +128,7 @@
     }
   },
   "header": {
+    "requestLogs": "リクエストログ",
     "account": "アカウント管理",
     "config": "構成管理",
     "cache": "キャッシュ管理",

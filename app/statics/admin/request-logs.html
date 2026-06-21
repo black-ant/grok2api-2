@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 请求日志</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .page-actions { display:flex; align-items:center; gap:8px }
+    .log-count { font-size:12px; color:var(--fg-muted); white-space:nowrap }
+    .logs-table th { background:#fff; text-transform:none; letter-spacing:0 }
+    .logs-table td { white-space:nowrap }
+    .logs-table tr { cursor:pointer }
+    .log-path { min-width:320px; max-width:520px; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+    .log-method { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:700 }
+    .log-status { display:inline-flex; align-items:center; height:22px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:700 }
+    .log-status.ok { background:#ecfdf5; color:#059669 }
+    .log-status.warn { background:#fff7ed; color:#ea580c }
+    .log-status.err { background:#fef2f2; color:#dc2626 }
+    .log-muted { color:#888 }
+    .log-detail-modal { width:min(960px,94vw); max-height:88vh; overflow:auto }
+    .log-detail-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px }
+    .log-detail-title { font-size:15px; font-weight:700; word-break:break-all }
+    .log-detail-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px }
+    .log-pill { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f5f5f5; color:#555; font-size:11px; font-weight:600 }
+    .log-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px }
+    .log-detail-section { min-width:0 }
+    .log-detail-label { font-size:12px; font-weight:700; margin-bottom:8px }
+    .log-json { max-height:48vh; overflow:auto; padding:12px; border-radius:12px; background:#111; color:#f7f7f7; font-size:12px; line-height:1.55; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+    @media (max-width: 860px) {
+      .page-hd { align-items:flex-start; flex-direction:column }
+      .log-detail-grid { grid-template-columns:1fr }
+    }
+  </style>
+</head>
+<body>
+
+<div id="admin-header" data-active="/admin/request-logs"></div>
+
+<main class="admin-main" style="padding-bottom:60px">
+  <div class="page-hd">
+    <div class="page-title">请求日志</div>
+    <div class="page-actions">
+      <div class="log-count" id="log-count">—</div>
+      <button type="button" class="btn btn-primary" id="refresh-btn">刷新</button>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <table class="logs-table">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>方法</th>
+          <th>路径</th>
+          <th>状态</th>
+          <th>耗时</th>
+          <th>入参</th>
+          <th>出参</th>
+        </tr>
+      </thead>
+      <tbody id="log-rows">
+        <tr><td colspan="7" class="loading-cell">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<div class="modal-overlay" id="detail-overlay" aria-hidden="true">
+  <div class="modal log-detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="log-detail-head">
+      <div class="log-detail-title" id="detail-title">请求详情</div>
+      <button type="button" class="btn btn-ghost btn-sm" id="detail-close">关闭</button>
+    </div>
+    <div class="log-detail-meta" id="detail-meta"></div>
+    <div class="log-detail-grid">
+      <div class="log-detail-section">
+        <div class="log-detail-label">入参</div>
+        <pre class="log-json" id="detail-request"></pre>
+      </div>
+      <div class="log-detail-section">
+        <div class="log-detail-label">出参</div>
+        <pre class="log-json" id="detail-response"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+<script>
+let adminAuthKey = '';
+let requestLogs = [];
+let retainedDates = [];
+
+function esc(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function fmtTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function fmtBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function statusClass(status) {
+  if (status >= 500) return 'err';
+  if (status >= 400) return 'warn';
+  return 'ok';
+}
+
+function pretty(value) {
+  return JSON.stringify(value ?? null, null, 2);
+}
+
+function renderRows() {
+  const rows = document.getElementById('log-rows');
+  const count = document.getElementById('log-count');
+  count.textContent = `${requestLogs.length} 条 / 今天和昨天`;
+  if (!requestLogs.length) {
+    rows.innerHTML = '<tr><td colspan="7" class="loading-cell">暂无日志</td></tr>';
+    return;
+  }
+  rows.innerHTML = requestLogs.map((item, index) => `
+    <tr data-index="${index}">
+      <td>${esc(fmtTime(item.started_at))}</td>
+      <td><span class="log-method">${esc(item.method)}</span></td>
+      <td class="log-path" title="${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}">${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}</td>
+      <td><span class="log-status ${statusClass(Number(item.status_code || 0))}">${esc(item.status_code)}</span></td>
+      <td>${esc(item.duration_ms)} ms</td>
+      <td>${fmtBytes(item.request?.bytes)}${item.request?.truncated ? ' <span class="log-muted">截断</span>' : ''}</td>
+      <td>${fmtBytes(item.response?.bytes)}${item.response?.truncated ? ' <span class="log-muted">截断</span>' : ''}</td>
+    </tr>`).join('');
+  rows.querySelectorAll('tr[data-index]').forEach((row) => {
+    row.addEventListener('click', () => openDetail(requestLogs[Number(row.dataset.index)]));
+  });
+}
+
+async function loadLogs() {
+  const res = await fetch(`${ADMIN_API}/request-logs?limit=300`, {
+    headers: { Authorization: `Bearer ${adminAuthKey}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(await res.text() || res.statusText);
+  const payload = await res.json();
+  retainedDates = payload.retained_dates || [];
+  requestLogs = payload.items || [];
+  renderRows();
+}
+
+function openDetail(item) {
+  if (!item) return;
+  const overlay = document.getElementById('detail-overlay');
+  document.getElementById('detail-title').textContent = `${item.method || ''} ${item.path || ''}`;
+  document.getElementById('detail-meta').innerHTML = [
+    fmtTime(item.started_at),
+    `${item.status_code || '—'}`,
+    `${item.duration_ms || 0} ms`,
+    item.client || 'unknown',
+  ].map((value) => `<span class="log-pill">${esc(value)}</span>`).join('');
+  document.getElementById('detail-request').textContent = pretty({
+    query_params: item.query_params || {},
+    headers: item.request?.headers || {},
+    content_type: item.request?.content_type || '',
+    bytes: item.request?.bytes || 0,
+    truncated: Boolean(item.request?.truncated),
+    body: item.request?.body ?? null,
+  });
+  document.getElementById('detail-response').textContent = pretty({
+    status_code: item.status_code,
+    headers: item.response?.headers || {},
+    content_type: item.response?.content_type || '',
+    bytes: item.response?.bytes || 0,
+    truncated: Boolean(item.response?.truncated),
+    body: item.response?.body ?? null,
+    error: item.error || item.handler_error || null,
+  });
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeDetail() {
+  const overlay = document.getElementById('detail-overlay');
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+}
+
+function waitI18n() {
+  return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
+}
+
+(async () => {
+  await waitI18n();
+  await window.renderAdminHeader?.();
+  await window.renderSiteFooter?.();
+
+  adminAuthKey = await adminKey.get();
+  if (!adminAuthKey || !await verifyKey(ADMIN_API + '/verify', adminAuthKey).catch(() => false)) {
+    location.href = '/admin/login';
+    return;
+  }
+
+  document.getElementById('refresh-btn').addEventListener('click', async () => {
+    try {
+      await loadLogs();
+      window.showToast?.('已刷新', 'success');
+    } catch (e) {
+      window.showToast?.('请求日志加载失败', 'error');
+    }
+  });
+  document.getElementById('detail-close').addEventListener('click', closeDetail);
+  document.getElementById('detail-overlay').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeDetail();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeDetail();
+  });
+
+  try {
+    await loadLogs();
+  } catch (e) {
+    document.getElementById('log-rows').innerHTML = '<tr><td colspan="7" class="error-cell">加载失败</td></tr>';
+    window.showToast?.('请求日志加载失败', 'error');
+  }
+})();
+</script>
+</body>
+</html>

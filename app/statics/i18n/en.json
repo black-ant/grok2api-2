@@ -17,6 +17,7 @@
     "goToAdmin": "Go to Admin Panel"
   },
   "header": {
+    "requestLogs": "Request Logs",
     "account": "Account Management",
     "config": "Configuration Management",
     "cache": "Cache Management",

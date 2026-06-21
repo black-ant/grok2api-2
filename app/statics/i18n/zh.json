@@ -17,6 +17,7 @@
     "goToAdmin": "进入管理后台"
   },
   "header": {
+    "requestLogs": "请求日志",
     "account": "账户管理",
     "config": "配置管理",
     "cache": "缓存管理",

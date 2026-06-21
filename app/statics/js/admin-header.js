@@ -10,7 +10,8 @@ window.renderAdminHeader = async function renderAdminHeader() {
       return 'v1';
     }
   })();
-  const HEADER_HTML_CACHE_KEY = `grok2api.admin_header_html.${scriptVersion}`;
+  const HEADER_TEMPLATE_VERSION = 'request-logs-nav-1';
+  const HEADER_HTML_CACHE_KEY = `grok2api.admin_header_html.${scriptVersion}.${HEADER_TEMPLATE_VERSION}`;
   const META_VERSION_CACHE_KEY = `grok2api.meta_version.${scriptVersion}`;
   let appVersion = '';
   let updateInfo = null;
@@ -535,6 +536,24 @@ window.renderAdminHeader = async function renderAdminHeader() {
     node?.remove();
   };
 
+  const ensureRequestLogsNav = () => {
+    const nav = mount.querySelector('.admin-nav');
+    if (!nav) return;
+    let link = nav.querySelector('[data-nav="/admin/request-logs"]');
+    if (!link) {
+      link = document.createElement('a');
+      link.href = '/admin/request-logs';
+      link.className = 'admin-nav-link';
+      link.dataset.nav = '/admin/request-logs';
+      link.dataset.i18n = 'header.requestLogs';
+      link.textContent = '请求日志';
+      const configLink = nav.querySelector('[data-nav="/admin/config"]');
+      nav.insertBefore(link, configLink || null);
+    }
+    link.removeAttribute('hidden');
+    link.style.removeProperty('display');
+  };
+
   await loadVersion();
 
   try {
@@ -542,7 +561,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
     if (cachedHtml) {
       mount.innerHTML = cachedHtml;
     } else {
-      const res = await fetch('/static/admin/header.html');
+      const res = await fetch(`/static/admin/header.html?v=${encodeURIComponent(scriptVersion)}`, { cache: 'no-store' });
       if (!res.ok) throw new Error('header unavailable');
       const html = await res.text();
       mount.innerHTML = html;
@@ -561,6 +580,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
           </div>
           <nav class="admin-nav">
             <a href="/admin/account" class="admin-nav-link" data-nav="/admin/account" data-i18n="header.account">账户管理</a>
+            <a href="/admin/request-logs" class="admin-nav-link" data-nav="/admin/request-logs" data-i18n="header.requestLogs">请求日志</a>
             <a href="/admin/config" class="admin-nav-link" data-nav="/admin/config" data-i18n="header.config">配置管理</a>
             <a href="/admin/cache" class="admin-nav-link" data-nav="/admin/cache" data-i18n="header.cache">缓存管理</a>
           </nav>
@@ -610,6 +630,8 @@ window.renderAdminHeader = async function renderAdminHeader() {
         </div>
       </header>`;
   }
+
+  ensureRequestLogsNav();
 
   const active = mount.dataset.active || location.pathname;
   mount.querySelectorAll('[data-nav]').forEach((link) => {
