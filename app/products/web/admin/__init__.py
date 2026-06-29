@@ -5,14 +5,16 @@ Heavy handlers are split into ``tokens`` and ``batch`` sub-modules.
 """
 
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import orjson
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import RootModel
+from pydantic import RootModel, ValidationError as PydanticValidationError
 
 from app.control.account.backends.factory import get_repository_backend
+from app.control.account.commands import ListAccountsQuery
 from app.platform.auth.middleware import verify_admin_key
 from app.platform.config.snapshot import config
 from app.platform.errors import AppError, ErrorKind, ValidationError
@@ -256,6 +258,106 @@ async def get_request_logs(limit: int = Query(200, ge=1, le=1000)):
                 "retention_days": request_log_store.retention_days,
                 "retained_dates": request_log_store.retained_dates(),
                 "items": await request_log_store.list(limit=limit),
+            }
+        ),
+        media_type="application/json",
+    )
+
+
+@router.get("/debug/chat/models", tags=[_TAG_ADMIN_SYSTEM])
+async def list_debug_chat_models():
+    from app.control.model import registry as model_registry
+
+    models = [
+        {
+            "id": spec.model_name,
+            "name": spec.public_name,
+            "pool": spec.pool_name(),
+            "console": spec.is_console_chat(),
+        }
+        for spec in model_registry.list_enabled()
+        if spec.is_chat() or spec.is_console_chat()
+    ]
+    return Response(
+        content=orjson.dumps({"object": "list", "data": models}),
+        media_type="application/json",
+    )
+
+
+@router.get("/debug/chat/tokens", tags=[_TAG_ADMIN_SYSTEM])
+async def list_debug_chat_tokens(repo: "AccountRepository" = Depends(get_repo)):
+    all_items: list = []
+    page_num = 1
+    while True:
+        page = await repo.list_accounts(ListAccountsQuery(page=page_num, page_size=2000))
+        all_items.extend(page.items)
+        if page_num * 2000 >= page.total:
+            break
+        page_num += 1
+
+    tokens = [
+        {
+            "token": record.token,
+            "label": f"{record.token[:8]}...{record.token[-8:]} · {record.pool or 'basic'} · {record.status}",
+            "pool": record.pool or "basic",
+            "status": record.status,
+            "tags": record.tags or [],
+        }
+        for record in all_items
+        if not getattr(record, "deleted_at", None)
+    ]
+    return Response(
+        content=orjson.dumps({"object": "list", "data": tokens}),
+        media_type="application/json",
+    )
+
+
+@router.post("/debug/chat", tags=[_TAG_ADMIN_SYSTEM])
+async def debug_chat(req: Request):
+    from app.products.openai.chat import completions as chat_completions
+    from app.products.openai.router import _validate_chat
+    from app.products.openai.schemas import ChatCompletionRequest
+
+    try:
+        payload = await req.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    try:
+        force_token = str(payload.pop("token", "") or "").strip() or None
+        chat_req = ChatCompletionRequest.model_validate(payload)
+    except PydanticValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    _validate_chat(chat_req)
+
+    started = time.perf_counter()
+    messages = [m.model_dump(exclude_none=True) for m in chat_req.messages]
+    result = await chat_completions(
+        model=chat_req.model,
+        messages=messages,
+        stream=False,
+        emit_think=None if chat_req.reasoning_effort is None else chat_req.reasoning_effort != "none",
+        tools=chat_req.tools,
+        tool_choice=chat_req.tool_choice,
+        temperature=chat_req.temperature if chat_req.temperature is not None else 0.8,
+        top_p=chat_req.top_p if chat_req.top_p is not None else 0.95,
+        force_token=force_token,
+    )
+    return Response(
+        content=orjson.dumps(
+            {
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "request": {
+                    "model": chat_req.model,
+                    "messages": messages,
+                    "stream": False,
+                    "reasoning_effort": chat_req.reasoning_effort,
+                    "temperature": chat_req.temperature,
+                    "top_p": chat_req.top_p,
+                    "tools": chat_req.tools,
+                    "tool_choice": chat_req.tool_choice,
+                    "token": force_token,
+                },
+                "response": result,
             }
         ),
         media_type="application/json",

@@ -10,7 +10,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
       return 'v1';
     }
   })();
-  const HEADER_TEMPLATE_VERSION = 'request-logs-nav-1';
+  const HEADER_TEMPLATE_VERSION = 'debug-chat-nav-1';
   const HEADER_HTML_CACHE_KEY = `grok2api.admin_header_html.${scriptVersion}.${HEADER_TEMPLATE_VERSION}`;
   const META_VERSION_CACHE_KEY = `grok2api.meta_version.${scriptVersion}`;
   let appVersion = '';
@@ -554,6 +554,23 @@ window.renderAdminHeader = async function renderAdminHeader() {
     link.style.removeProperty('display');
   };
 
+  const ensureDebugChatNav = () => {
+    const nav = mount.querySelector('.admin-nav');
+    if (!nav) return;
+    let link = nav.querySelector('[data-nav="/admin/debug-chat"]');
+    if (!link) {
+      link = document.createElement('a');
+      link.href = '/admin/debug-chat';
+      link.className = 'admin-nav-link';
+      link.dataset.nav = '/admin/debug-chat';
+      link.textContent = '测试对话';
+      const requestLogsLink = nav.querySelector('[data-nav="/admin/request-logs"]');
+      nav.insertBefore(link, requestLogsLink || null);
+    }
+    link.removeAttribute('hidden');
+    link.style.removeProperty('display');
+  };
+
   await loadVersion();
 
   try {
@@ -580,6 +597,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
           </div>
           <nav class="admin-nav">
             <a href="/admin/account" class="admin-nav-link" data-nav="/admin/account" data-i18n="header.account">账户管理</a>
+            <a href="/admin/debug-chat" class="admin-nav-link" data-nav="/admin/debug-chat">测试对话</a>
             <a href="/admin/request-logs" class="admin-nav-link" data-nav="/admin/request-logs" data-i18n="header.requestLogs">请求日志</a>
             <a href="/admin/config" class="admin-nav-link" data-nav="/admin/config" data-i18n="header.config">配置管理</a>
             <a href="/admin/cache" class="admin-nav-link" data-nav="/admin/cache" data-i18n="header.cache">缓存管理</a>
@@ -632,6 +650,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
   }
 
   ensureRequestLogsNav();
+  ensureDebugChatNav();
 
   const active = mount.dataset.active || location.pathname;
   mount.querySelectorAll('[data-nav]').forEach((link) => {

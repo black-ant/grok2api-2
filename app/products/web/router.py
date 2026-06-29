@@ -64,6 +64,11 @@ async def admin_request_logs():
     return _serve_html("admin/request-logs.html")
 
 
+@router.get("/admin/debug-chat", include_in_schema=False)
+async def admin_debug_chat():
+    return _serve_html("admin/debug-chat.html")
+
+
 # --- WebUI ---
 @router.get("/webui", include_in_schema=False)
 async def webui_root():
