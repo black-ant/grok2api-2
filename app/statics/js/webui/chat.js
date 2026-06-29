@@ -471,8 +471,12 @@
     const textValue = String(value || '');
     if (!textValue) return;
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      await navigator.clipboard.writeText(textValue);
-      return;
+      try {
+        await navigator.clipboard.writeText(textValue);
+        return;
+      } catch (error) {
+        // Fall back for HTTP / permission-limited contexts.
+      }
     }
     const textarea = document.createElement('textarea');
     textarea.value = textValue;
@@ -480,9 +484,14 @@
     textarea.style.position = 'fixed';
     textarea.style.opacity = '0';
     document.body.appendChild(textarea);
+    textarea.focus();
     textarea.select();
-    document.execCommand('copy');
+    textarea.setSelectionRange(0, textValue.length);
+    const copied = document.execCommand('copy');
     textarea.remove();
+    if (!copied) {
+      throw new Error(text('webui.chat.copyFailed', 'Copy failed'));
+    }
   }
 
   function beginEditMessage(messageIndex, content) {

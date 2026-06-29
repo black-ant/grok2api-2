@@ -1,0 +1,330 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 测试对话</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .debug-top-card { margin-bottom:14px }
+    .debug-layout { display:grid; grid-template-columns:minmax(320px,420px) minmax(0,1fr); gap:14px; align-items:start }
+    .debug-card { background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.04) }
+    .debug-form { display:grid; gap:12px }
+    .field { display:grid; gap:6px }
+    .field label { font-size:12px; font-weight:700; color:#222 }
+    .field input,.field select,.field textarea { width:100%; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
+    .field input,.field select { height:38px; padding:0 10px }
+    .field textarea { min-height:160px; padding:10px; resize:vertical; line-height:1.5 }
+    .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+    .top-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+    .debug-actions { display:flex; align-items:center; gap:8px }
+    .debug-actions .btn { min-width:96px }
+    .debug-status { font-size:12px; color:#777 }
+    .manual-token { display:none; margin-top:8px }
+    .manual-token.is-open { display:block }
+    .result-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px }
+    .result-title { font-size:13px; font-weight:800 }
+    .result-meta { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px }
+    .result-pill { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f5f5f5; color:#555; font-size:11px; font-weight:650 }
+    .result-block { display:grid; gap:6px; margin-top:10px }
+    .result-block-title { font-size:12px; font-weight:800; color:#222 }
+    .result-json { min-height:180px; max-height:36vh; overflow:auto; padding:12px; border-radius:12px; background:#111; color:#f7f7f7; font-size:12px; line-height:1.55; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+    .result-json.is-muted { color:#aaa; background:#1b1b1b }
+    @media (max-width: 980px) {
+      .debug-layout { grid-template-columns:1fr }
+      .page-hd { align-items:flex-start; flex-direction:column }
+      .top-fields { grid-template-columns:1fr }
+    }
+  </style>
+</head>
+<body>
+
+<div id="admin-header" data-active="/admin/debug-chat"></div>
+
+<main class="admin-main" style="padding-bottom:60px">
+  <div class="page-hd">
+    <div class="page-title">测试对话</div>
+    <div class="debug-status" id="debug-status">选择模型后发送一次调试调用</div>
+  </div>
+
+  <section class="debug-card debug-top-card">
+    <div class="top-fields">
+      <div class="field">
+        <label for="model-select">模型</label>
+        <select id="model-select" required>
+          <option value="">加载中…</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="token-select">密钥策略</label>
+        <select id="token-select">
+          <option value="">自动轮询</option>
+          <option value="__manual__">手动输入 token</option>
+        </select>
+        <input class="manual-token" id="manual-token-input" type="text" placeholder="粘贴完整 token">
+      </div>
+    </div>
+  </section>
+
+  <div class="debug-layout">
+    <section class="debug-card">
+      <form class="debug-form" id="debug-form">
+        <div class="field">
+          <label for="system-input">系统提示</label>
+          <textarea id="system-input" rows="3" placeholder="可选"></textarea>
+        </div>
+        <div class="field">
+          <label for="user-input">用户消息</label>
+          <textarea id="user-input" rows="7" required>你好，用一句话回复当前模型可用。</textarea>
+        </div>
+        <div class="inline-fields">
+          <div class="field">
+            <label for="temperature-input">temperature</label>
+            <input id="temperature-input" type="number" min="0" max="2" step="0.1" value="0.8">
+          </div>
+          <div class="field">
+            <label for="top-p-input">top_p</label>
+            <input id="top-p-input" type="number" min="0" max="1" step="0.05" value="0.95">
+          </div>
+        </div>
+        <div class="debug-actions">
+          <button type="submit" class="btn btn-primary" id="send-btn">发送</button>
+          <button type="button" class="btn btn-ghost" id="clear-btn">清空结果</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="debug-card">
+      <div class="result-head">
+        <div class="result-title">调用结果</div>
+        <button type="button" class="btn btn-ghost btn-sm" id="copy-result-btn">复制结果</button>
+      </div>
+      <div class="result-meta" id="result-meta"></div>
+      <div class="result-block">
+        <div class="result-block-title">入参</div>
+        <pre class="result-json is-muted" id="result-request">等待发送…</pre>
+      </div>
+      <div class="result-block">
+        <div class="result-block-title">出参</div>
+        <pre class="result-json is-muted" id="result-response">等待发送…</pre>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+<script>
+let adminAuthKey = '';
+let lastResultText = '';
+
+function pretty(value) {
+  return JSON.stringify(value ?? null, null, 2);
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setStatus(text) {
+  document.getElementById('debug-status').textContent = text;
+}
+
+function setDebugResult(requestValue, responseValue, meta = []) {
+  const requestText = typeof requestValue === 'string' ? requestValue : pretty(requestValue);
+  const responseText = typeof responseValue === 'string' ? responseValue : pretty(responseValue);
+  lastResultText = `入参\n${requestText}\n\n出参\n${responseText}`;
+  const requestEl = document.getElementById('result-request');
+  const responseEl = document.getElementById('result-response');
+  requestEl.textContent = requestText;
+  responseEl.textContent = responseText;
+  requestEl.classList.toggle('is-muted', !requestValue || requestText === '等待发送…');
+  responseEl.classList.toggle('is-muted', !responseValue || responseText === '等待发送…' || responseText === '等待返回…');
+  document.getElementById('result-meta').innerHTML = meta.map((item) => `<span class="result-pill">${esc(item)}</span>`).join('');
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (error) {
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('复制失败');
+}
+
+function readNumber(id, fallback) {
+  const value = Number(document.getElementById(id).value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function buildPayload() {
+  const messages = [];
+  const system = document.getElementById('system-input').value.trim();
+  const user = document.getElementById('user-input').value.trim();
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: user });
+  return {
+    model: document.getElementById('model-select').value,
+    token: selectedTokenValue(),
+    messages,
+    stream: false,
+    temperature: readNumber('temperature-input', 0.8),
+    top_p: readNumber('top-p-input', 0.95),
+  };
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { Authorization: `Bearer ${adminAuthKey}`, ...(options.headers || {}) };
+  const res = await fetch(`${ADMIN_API}${path}`, { ...options, headers, cache: 'no-store' });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const message = typeof body === 'string' ? body : (body?.detail || body?.error?.message || res.statusText);
+    const error = new Error(message);
+    error.status = res.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
+}
+
+async function loadModels() {
+  const select = document.getElementById('model-select');
+  const payload = await apiFetch('/debug/chat/models');
+  const models = payload.data || [];
+  select.innerHTML = models.map((item) => (
+    `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.pool)}${item.console ? ' · console' : ''}</option>`
+  )).join('');
+  if (!models.length) select.innerHTML = '<option value="">无可用模型</option>';
+}
+
+async function loadTokens() {
+  const select = document.getElementById('token-select');
+  let tokens = [];
+  try {
+    const payload = await apiFetch('/debug/chat/tokens');
+    tokens = payload.data || [];
+  } catch {
+    const fallback = await apiFetch('/tokens');
+    tokens = (fallback.tokens || []).map((item) => ({
+      token: item.token,
+      label: `${item.token} · ${item.pool || 'basic'} · ${item.status || ''}`,
+    }));
+  }
+  select.innerHTML = '<option value="">自动轮询</option><option value="__manual__">手动输入 token</option>' + tokens.map((item) => (
+    `<option value="${esc(item.token)}">${esc(item.label || item.token)}</option>`
+  )).join('');
+}
+
+function selectedTokenValue() {
+  const selected = document.getElementById('token-select').value;
+  if (selected === '__manual__') return document.getElementById('manual-token-input').value.trim() || undefined;
+  return selected || undefined;
+}
+
+function syncManualTokenInput() {
+  const input = document.getElementById('manual-token-input');
+  input.classList.toggle('is-open', document.getElementById('token-select').value === '__manual__');
+}
+
+async function sendDebugChat() {
+  const button = document.getElementById('send-btn');
+  const payload = buildPayload();
+  if (!payload.model || !payload.messages.at(-1)?.content) return;
+  button.disabled = true;
+  setStatus('调用中…');
+  setDebugResult(payload, '等待返回…', ['等待返回']);
+  try {
+    const started = Date.now();
+    const result = await apiFetch('/debug/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const elapsed = Date.now() - started;
+    setDebugResult(result.request || payload, result.response ?? result, [payload.model, payload.token ? '指定密钥' : '自动轮询', `${result.duration_ms ?? elapsed} ms`, '成功']);
+    setStatus('调用完成');
+    window.showToast?.('调用完成', 'success');
+  } catch (error) {
+    setDebugResult(payload, { status: error.status || 0, message: error.message, body: error.body || null }, ['失败']);
+    setStatus('调用失败');
+    window.showToast?.('调用失败', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function waitI18n() {
+  return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
+}
+
+(async () => {
+  await waitI18n();
+  await window.renderAdminHeader?.();
+  await window.renderSiteFooter?.();
+
+  adminAuthKey = await adminKey.get();
+  if (!adminAuthKey || !await verifyKey(ADMIN_API + '/verify', adminAuthKey).catch(() => false)) {
+    location.href = '/admin/login';
+    return;
+  }
+
+  document.getElementById('debug-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await sendDebugChat();
+  });
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    setDebugResult('等待发送…', '等待发送…');
+    setStatus('选择模型后发送一次调试调用');
+  });
+  document.getElementById('copy-result-btn').addEventListener('click', async () => {
+    try {
+      await copyText(lastResultText || '');
+      window.showToast?.('已复制', 'success');
+    } catch {
+      window.showToast?.('复制失败', 'error');
+    }
+  });
+  document.getElementById('token-select').addEventListener('change', syncManualTokenInput);
+
+  let modelReady = false;
+  try {
+    await loadModels();
+    modelReady = true;
+  } catch (error) {
+    document.getElementById('model-select').innerHTML = '<option value="">模型加载失败</option>';
+  }
+  try {
+    await loadTokens();
+  } catch (error) {
+    document.getElementById('token-select').innerHTML = '<option value="">自动轮询</option><option value="__manual__">手动输入 token</option>';
+  }
+  syncManualTokenInput();
+  setStatus(modelReady ? '模型和密钥已加载' : '模型加载失败');
+  if (!modelReady) window.showToast?.('模型加载失败', 'error');
+})();
+</script>
+</body>
+</html>
