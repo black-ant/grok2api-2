@@ -164,7 +164,7 @@ class AccountRefreshService:
         if not active:
             return RefreshResult(checked=len(records))
 
-        concurrency = get_config("account.refresh.usage_concurrency", 50)
+        concurrency = get_config("account.refresh.usage_concurrency", 15)
         results = await run_batch(
             active,
             lambda r: self._refresh_one(r, apply_fallback=True, bootstrap=True),
@@ -211,7 +211,7 @@ class AccountRefreshService:
         if pool is not None:
             records = [r for r in records if r.pool == pool]
 
-        concurrency = get_config("account.refresh.usage_concurrency", 50)
+        concurrency = get_config("account.refresh.usage_concurrency", 15)
         results = await run_batch(
             records,
             lambda r: self._refresh_one(r, apply_fallback=True),
@@ -245,7 +245,7 @@ class AccountRefreshService:
     async def refresh_tokens(self, tokens: list[str]) -> RefreshResult:
         """Explicit refresh for a list of tokens (admin / manual trigger)."""
         records = [r for r in await self._repo.get_accounts(tokens) if is_manageable(r)]
-        concurrency = get_config("account.refresh.usage_concurrency", 50)
+        concurrency = get_config("account.refresh.usage_concurrency", 15)
         results = await run_batch(
             records,
             lambda r: self._refresh_one(r, bootstrap=True),
@@ -437,15 +437,11 @@ class AccountRefreshService:
                     extra_patch: dict = {}
                     if window is not None:
                         if mode_id == 5:
-                            # Console 429: 扣减 10 而不是清零，避免一次 429 浪费 19 次配额
-                            # 计时器与阈值机制对齐（remaining <= 12 时才启动）
-                            new_remaining = max(0, window.remaining - 10)
+                            # Console 429: 一次直接清零（扣 20），账号当前窗口不再可用
+                            # 立即启动恢复计时器，窗口结束后由巡检任务重置
+                            new_remaining = 0
                             reset_at = window.reset_at
-                            if (
-                                reset_at is None
-                                and new_remaining <= 12
-                                and window.window_seconds > 0
-                            ):
+                            if reset_at is None and window.window_seconds > 0:
                                 reset_at = now + window.window_seconds * 1000
                             quota_patch[_MODE_KEYS[mode_id]] = QuotaWindow(
                                 remaining=new_remaining,
@@ -455,24 +451,34 @@ class AccountRefreshService:
                                 synced_at=window.synced_at,
                                 source=QuotaSource.ESTIMATED,
                             ).to_dict()
-                            # 连续失败 >= 5 次且配额被扣到 0 时，标记为异常
-                            # +1 是因为本次失败还没计入 usage_fail_count
-                            if (
-                                new_remaining <= 0
-                                and record.usage_fail_count + 1 >= 5
-                            ):
+                            # Console 专属 429 计数器（独立于 usage_fail_count，
+                            # 避免被 500/网络超时等其他失败干扰）。
+                            # 12 小时滑动窗口：距离上次 429 超过 12 小时 → 计数重置为 0
+                            ext_data = record.ext or {}
+                            last_429_at = int(ext_data.get("console_429_last_at", 0))
+                            sliding_window_ms = 12 * 3600 * 1000
+                            if last_429_at > 0 and (now - last_429_at) > sliding_window_ms:
+                                console_429_count = 0
+                            else:
+                                console_429_count = int(ext_data.get("console_429_count", 0))
+                            new_429_count = console_429_count + 1
+                            ext_merge: dict = {
+                                **ext_data,
+                                "console_429_count": new_429_count,
+                                "console_429_last_at": now,
+                            }
+                            # 12 小时内累计 3 次 429 标记为 EXPIRED 异常组
+                            if new_429_count >= 3:
                                 extra_patch["status"] = AccountStatus.EXPIRED
                                 extra_patch["state_reason"] = "console_429_threshold_exceeded"
-                                extra_patch["ext_merge"] = {
-                                    **(record.ext or {}),
-                                    "expired_at": now,
-                                    "expired_reason": "console_429_threshold_exceeded",
-                                }
+                                ext_merge["expired_at"] = now
+                                ext_merge["expired_reason"] = "console_429_threshold_exceeded"
                                 logger.info(
-                                    "account marked expired due to repeated 429: token={}... fail_count={}",
+                                    "account marked expired due to repeated 429: token={}... count={}",
                                     token[:10],
-                                    record.usage_fail_count + 1,
+                                    new_429_count,
                                 )
+                            extra_patch["ext_merge"] = ext_merge
                         else:
                             # 非 console 模式保持原有清零逻辑
                             reset_at = (
@@ -557,11 +563,19 @@ class AccountRefreshService:
                 if existing.is_window_expired(now):
                     default = default_quota_window(record.pool, mode_id)
                     if default is not None:
+                        new_remaining = max(0, default.total - 1)  # 本次调用消耗1次
+                        # console (mode_id=5) 阈值轮换策略：reset_at=None，
+                        # 让后续扣减在 remaining<=12 时再启动计时器，与 else 分支一致；
+                        # 非 console 模式保持原行为：首次使用即启动计时器
+                        if mode_id == 5:
+                            reset_at = None
+                        else:
+                            reset_at = now + default.window_seconds * 1000
                         quota_patch[mode_key] = QuotaWindow(
-                            remaining=max(0, default.total - 1),  # 本次调用消耗1次
+                            remaining=new_remaining,
                             total=default.total,
                             window_seconds=default.window_seconds,
-                            reset_at=now + default.window_seconds * 1000,
+                            reset_at=reset_at,
                             synced_at=now,
                             source=QuotaSource.DEFAULT,
                         ).to_dict()
@@ -634,6 +648,27 @@ class AccountRefreshService:
         count = await self._repo.reset_expired_console_windows()
         if count > 0:
             logger.debug("console quota windows auto-reset: count={}", count)
+        return count
+
+    async def recover_console_expired_accounts(self) -> int:
+        """自动恢复 console 429 EXPIRED 账号（满足条件）。
+
+        恢复条件（AND）：
+        - status = EXPIRED
+        - state_reason = console_429_threshold_exceeded
+        - usage_use_count > 5（有成功调用历史）
+        - expired_at <= now - 1 小时（等待时间够了）
+
+        恢复操作：
+        - status: EXPIRED → ACTIVE
+        - 清理 ext 中的 expired_at / expired_reason / console_429_count / console_429_last_at
+
+        Returns:
+            恢复的账号数量。
+        """
+        count = await self._repo.recover_console_expired_accounts()
+        if count > 0:
+            logger.info("console expired accounts auto-recovered: count={}", count)
         return count
 
 

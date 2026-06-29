@@ -150,6 +150,17 @@ def normalize_quota_window(
             synced_at=window.synced_at,
             source=window.source,
         )
+    if pool == "basic" and mode_id == 5:
+        # L1 修复：矫正历史 console 配额数据到当前常量值
+        # 历史值如 200/24h、70/5min、100/1min、30/15min、30/30min 等均归一到 20/60min
+        return QuotaWindow(
+            remaining=max(0, min(int(window.remaining), BASIC_CONSOLE_LIMIT)),
+            total=BASIC_CONSOLE_LIMIT,
+            window_seconds=BASIC_CONSOLE_WINDOW_SECONDS,
+            reset_at=window.reset_at,
+            synced_at=window.synced_at,
+            source=window.source,
+        )
     return window
 
 
