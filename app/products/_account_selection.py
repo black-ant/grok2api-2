@@ -46,6 +46,7 @@ async def reserve_account(
     spec: ModelSpec,
     *,
     exclude_tokens: list[str] | None = None,
+    only_token: str | None = None,
     now_s_override: int | None = None,
 ):
     """Reserve an account and return ``(lease, selected_mode_id)``.
@@ -55,6 +56,14 @@ async def reserve_account(
     data is never probed.
     """
     original_mode_id = int(spec.mode_id)
+    effective_exclude_tokens = exclude_tokens
+    if only_token:
+        table = getattr(directory, "_table", None)
+        token_by_idx = getattr(table, "token_by_idx", None)
+        if not token_by_idx or only_token not in getattr(table, "idx_by_token", {}):
+            return None, original_mode_id
+        forced_excludes = [token for token in token_by_idx if token != only_token]
+        effective_exclude_tokens = [*(exclude_tokens or []), *forced_excludes]
 
     async def _try_reserve():
         for candidate_mode_id in mode_candidates(spec):
@@ -62,7 +71,7 @@ async def reserve_account(
                 pool_candidates=spec.pool_candidates(),
                 mode_id=candidate_mode_id,
                 now_s_override=now_s_override,
-                exclude_tokens=exclude_tokens,
+                exclude_tokens=effective_exclude_tokens,
             )
             if lease is not None:
                 return lease, candidate_mode_id

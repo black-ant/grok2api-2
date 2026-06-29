@@ -457,6 +457,7 @@ async def completions(
     temperature: float = 0.8,
     top_p: float = 0.95,
     request_overrides: dict | None = None,
+    force_token: str | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for /v1/chat/completions.
 
@@ -487,6 +488,7 @@ async def completions(
             emit_think=emit_think,
             temperature=temperature,
             top_p=top_p,
+            force_token=force_token,
         )
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -500,7 +502,7 @@ async def completions(
         raise RateLimitError("Account directory not initialised")
     directory = _acct_dir
 
-    max_retries = selection_max_retries()
+    max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
     response_id = make_response_id()
     timeout_s = cfg.get_float("chat.timeout", 120.0)
@@ -524,6 +526,7 @@ async def completions(
                     spec,
                     now_s_override=now_s(),
                     exclude_tokens=excluded or None,
+                    only_token=force_token,
                 )
                 if acct is None:
                     raise RateLimitError("No available accounts for this model tier")
@@ -745,6 +748,7 @@ async def completions(
             spec,
             now_s_override=now_s(),
             exclude_tokens=excluded or None,
+            only_token=force_token,
         )
         if acct is None:
             raise RateLimitError("No available accounts for this model tier")

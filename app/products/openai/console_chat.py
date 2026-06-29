@@ -98,6 +98,7 @@ async def completions(
     emit_think: bool | None = None,
     temperature: float = 0.7,
     top_p: float = 0.95,
+    force_token: str | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for console.x.ai chat completions.
 
@@ -107,7 +108,7 @@ async def completions(
     spec = resolve_model(model)
     effort = _reasoning_effort_from_emit_think(emit_think)
     timeout_s = cfg.get_float("chat.timeout", 120.0)
-    max_retries = selection_max_retries()
+    max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
     response_id = make_response_id()
 
@@ -131,6 +132,7 @@ async def completions(
                     spec,
                     now_s_override=now_s(),
                     exclude_tokens=excluded or None,
+                    only_token=force_token,
                 )
                 if acct is None:
                     raise RateLimitError("No available accounts for this model tier")
@@ -231,6 +233,7 @@ async def completions(
             spec,
             now_s_override=now_s(),
             exclude_tokens=excluded or None,
+            only_token=force_token,
         )
         if acct is None:
             raise RateLimitError("No available accounts for this model tier")
