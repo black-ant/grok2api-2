@@ -79,6 +79,7 @@
     <div class="log-detail-head">
       <div class="log-detail-title" id="detail-title">请求详情</div>
       <div class="log-detail-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="copy-curl-btn">复制 curl</button>
         <button type="button" class="btn btn-primary btn-sm" id="copy-all-btn">复制全部</button>
         <button type="button" class="btn btn-ghost btn-sm" id="detail-close">关闭</button>
       </div>
@@ -173,6 +174,33 @@ function buildFullDetail(item) {
   };
 }
 
+function shellQuote(value) {
+  return `'${String(value ?? '').replace(/'/g, `'\\''`)}'`;
+}
+
+function curlUrl(item) {
+  const path = item.path || '/';
+  const query = item.query ? `?${item.query}` : '';
+  return `${location.origin}${path}${query}`;
+}
+
+function buildCurlCommand(item) {
+  const headers = item.request?.headers || {};
+  const ignoredHeaders = new Set(['host', 'content-length', 'connection', 'accept-encoding']);
+  const lines = [`curl ${shellQuote(curlUrl(item))}`, `  -X ${shellQuote(item.method || 'GET')}`];
+  Object.entries(headers).forEach(([key, value]) => {
+    const headerName = String(key || '').toLowerCase();
+    if (!headerName || ignoredHeaders.has(headerName)) return;
+    lines.push(`  -H ${shellQuote(`${key}: ${value}`)}`);
+  });
+  const body = item.request?.body;
+  if (body !== null && body !== undefined) {
+    const rawBody = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+    lines.push(`  --data-raw ${shellQuote(rawBody)}`);
+  }
+  return lines.join(' ');
+}
+
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -199,6 +227,16 @@ async function copyDetail(part) {
   try {
     await copyText(pretty(payload));
     window.showToast?.('已复制', 'success');
+  } catch (e) {
+    window.showToast?.('复制失败', 'error');
+  }
+}
+
+async function copyCurl() {
+  if (!activeLogDetail) return;
+  try {
+    await copyText(buildCurlCommand(activeLogDetail));
+    window.showToast?.(activeLogDetail.request?.truncated ? '已复制 curl，入参已截断' : '已复制 curl', 'success');
   } catch (e) {
     window.showToast?.('复制失败', 'error');
   }
@@ -287,6 +325,7 @@ function waitI18n() {
     }
   });
   document.getElementById('detail-close').addEventListener('click', closeDetail);
+  document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
   document.getElementById('copy-all-btn').addEventListener('click', () => copyDetail('all'));
   document.getElementById('copy-request-btn').addEventListener('click', () => copyDetail('request'));
   document.getElementById('copy-response-btn').addEventListener('click', () => copyDetail('response'));

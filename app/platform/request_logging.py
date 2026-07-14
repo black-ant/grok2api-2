@@ -21,7 +21,7 @@ from app.platform.paths import log_path
 
 _DEFAULT_RETENTION_DAYS = 2
 _DEFAULT_BODY_LIMIT = 64 * 1024
-_DEFAULT_PATH_PREFIXES = ("/v1", "/webui/api")
+_DEFAULT_PATH_PREFIXES = ("/v1", "/webui/api", "/admin/api/debug/chat")
 _LOG_FILE_PREFIX = "request_"
 _LOG_FILE_SUFFIX = ".jsonl"
 

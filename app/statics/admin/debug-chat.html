@@ -61,12 +61,11 @@
         </select>
       </div>
       <div class="field">
-        <label for="token-select">密钥策略</label>
-        <select id="token-select">
-          <option value="">自动轮询</option>
-          <option value="__manual__">手动输入 token</option>
+        <label for="token-select">外部鉴权</label>
+        <select id="token-select" disabled>
+          <option value="">加载中…</option>
         </select>
-        <input class="manual-token" id="manual-token-input" type="text" placeholder="粘贴完整 token">
+        <input class="manual-token" id="manual-token-input" type="text" placeholder="外部 API key 由 app.api_key 提供" disabled>
       </div>
     </div>
   </section>
@@ -124,6 +123,7 @@
 <script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
 <script>
 let adminAuthKey = '';
+let externalApiKey = '';
 let lastResultText = '';
 
 function pretty(value) {
@@ -186,7 +186,6 @@ function buildPayload() {
   messages.push({ role: 'user', content: user });
   return {
     model: document.getElementById('model-select').value,
-    token: selectedTokenValue(),
     messages,
     stream: false,
     temperature: readNumber('temperature-input', 0.8),
@@ -210,6 +209,23 @@ async function apiFetch(path, options = {}) {
   return body;
 }
 
+async function externalFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (externalApiKey) headers.Authorization = `Bearer ${externalApiKey}`;
+  const res = await fetch(path, { ...options, headers, cache: 'no-store' });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const message = typeof body === 'string' ? body : (body?.detail || body?.error?.message || res.statusText);
+    const error = new Error(message);
+    error.status = res.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
+}
+
 async function loadModels() {
   const select = document.getElementById('model-select');
   const payload = await apiFetch('/debug/chat/models');
@@ -220,33 +236,23 @@ async function loadModels() {
   if (!models.length) select.innerHTML = '<option value="">无可用模型</option>';
 }
 
-async function loadTokens() {
-  const select = document.getElementById('token-select');
-  let tokens = [];
-  try {
-    const payload = await apiFetch('/debug/chat/tokens');
-    tokens = payload.data || [];
-  } catch {
-    const fallback = await apiFetch('/tokens');
-    tokens = (fallback.tokens || []).map((item) => ({
-      token: item.token,
-      label: `${item.token} · ${item.pool || 'basic'} · ${item.status || ''}`,
-    }));
-  }
-  select.innerHTML = '<option value="">自动轮询</option><option value="__manual__">手动输入 token</option>' + tokens.map((item) => (
-    `<option value="${esc(item.token)}">${esc(item.label || item.token)}</option>`
-  )).join('');
+function firstApiKey(value) {
+  if (Array.isArray(value)) return String(value.find((item) => String(item || '').trim()) || '').trim();
+  return String(value || '').split(',').map((item) => item.trim()).find(Boolean) || '';
 }
 
-function selectedTokenValue() {
-  const selected = document.getElementById('token-select').value;
-  if (selected === '__manual__') return document.getElementById('manual-token-input').value.trim() || undefined;
-  return selected || undefined;
+async function loadExternalAuth() {
+  const select = document.getElementById('token-select');
+  const cfg = await apiFetch('/config');
+  externalApiKey = firstApiKey(cfg?.app?.api_key);
+  select.innerHTML = externalApiKey
+    ? '<option value="configured">使用 app.api_key 调用 /v1</option>'
+    : '<option value="none">未配置 API key，按免鉴权调用 /v1</option>';
 }
 
 function syncManualTokenInput() {
   const input = document.getElementById('manual-token-input');
-  input.classList.toggle('is-open', document.getElementById('token-select').value === '__manual__');
+  input.classList.remove('is-open');
 }
 
 async function sendDebugChat() {
@@ -258,13 +264,13 @@ async function sendDebugChat() {
   setDebugResult(payload, '等待返回…', ['等待返回']);
   try {
     const started = Date.now();
-    const result = await apiFetch('/debug/chat', {
+    const result = await externalFetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const elapsed = Date.now() - started;
-    setDebugResult(result.request || payload, result.response ?? result, [payload.model, payload.token ? '指定密钥' : '自动轮询', `${result.duration_ms ?? elapsed} ms`, '成功']);
+    setDebugResult(payload, result, [payload.model, '/v1/chat/completions', `${elapsed} ms`, '成功']);
     setStatus('调用完成');
     window.showToast?.('调用完成', 'success');
   } catch (error) {
@@ -307,9 +313,8 @@ function waitI18n() {
       window.showToast?.('复制失败', 'error');
     }
   });
-  document.getElementById('token-select').addEventListener('change', syncManualTokenInput);
-
   let modelReady = false;
+  let authReady = false;
   try {
     await loadModels();
     modelReady = true;
@@ -317,12 +322,13 @@ function waitI18n() {
     document.getElementById('model-select').innerHTML = '<option value="">模型加载失败</option>';
   }
   try {
-    await loadTokens();
+    await loadExternalAuth();
+    authReady = true;
   } catch (error) {
-    document.getElementById('token-select').innerHTML = '<option value="">自动轮询</option><option value="__manual__">手动输入 token</option>';
+    document.getElementById('token-select').innerHTML = '<option value="">外部鉴权加载失败</option>';
   }
   syncManualTokenInput();
-  setStatus(modelReady ? '模型和密钥已加载' : '模型加载失败');
+  setStatus(modelReady && authReady ? '模型和外部鉴权已加载' : '模型或外部鉴权加载失败');
   if (!modelReady) window.showToast?.('模型加载失败', 'error');
 })();
 </script>
