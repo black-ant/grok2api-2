@@ -289,7 +289,7 @@ async def lifespan(app: FastAPI):
             ),
             "run_at": _config.get_str("account.cleanup.run_at", "03:30"),
             "batch_size": max(1, _config.get_int("account.cleanup.batch_size", 5000)),
-            "vacuum": _config.get_bool("account.cleanup.vacuum", True),
+            "vacuum": _config.get_bool("account.cleanup.vacuum", False),
         }
 
     deleted_cleanup_task = asyncio.create_task(
