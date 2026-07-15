@@ -20,6 +20,14 @@ class VirtualModelEntrypointTests(unittest.TestCase):
         self.assertIn("real_model = resolved.model", source)
         self.assertNotIn("model_registry.get(model)", source)
 
+    def test_debug_chat_models_include_virtual_models_first(self):
+        source = Path("app/products/web/admin/__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn("virtual_models = [", source)
+        self.assertIn("for resolved in model_aliases.list_virtual_models()", source)
+        self.assertIn('"virtual": True', source)
+        self.assertIn('"data": [*virtual_models, *models]', source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -232,7 +232,7 @@ async function loadModels() {
   const payload = await apiFetch('/debug/chat/models');
   const models = payload.data || [];
   select.innerHTML = models.map((item) => (
-    `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.pool)}${item.console ? ' · console' : ''}</option>`
+    `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${item.virtual ? '虚拟模型' : esc(item.pool)}${item.console ? ' · console' : ''}</option>`
   )).join('');
   if (!models.length) select.innerHTML = '<option value="">无可用模型</option>';
 }

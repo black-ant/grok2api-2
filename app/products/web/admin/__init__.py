@@ -275,18 +275,31 @@ async def get_request_logs(
 
 @router.get("/debug/chat/models", tags=[_TAG_ADMIN_SYSTEM])
 async def list_debug_chat_models():
+    virtual_models = [
+        {
+            "id": resolved.requested_model,
+            "name": resolved.requested_model,
+            "pool": "virtual",
+            "console": resolved.spec.is_console_chat(),
+            "virtual": True,
+            "resolved_model": resolved.model,
+        }
+        for resolved in model_aliases.list_virtual_models()
+        if resolved.spec.is_chat() or resolved.spec.is_console_chat()
+    ]
     models = [
         {
             "id": spec.model_name,
             "name": spec.public_name,
             "pool": spec.pool_name(),
             "console": spec.is_console_chat(),
+            "virtual": False,
         }
         for spec in model_registry.list_enabled()
         if spec.is_chat() or spec.is_console_chat()
     ]
     return Response(
-        content=orjson.dumps({"object": "list", "data": models}),
+        content=orjson.dumps({"object": "list", "data": [*virtual_models, *models]}),
         media_type="application/json",
     )
 
