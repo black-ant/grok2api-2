@@ -24,6 +24,7 @@ from app.control.model.registry import resolve as resolve_model
 from app.control.model.enums import ModeId
 from app.control.account.enums import FeedbackKind
 from app.dataplane.account.selector import current_strategy
+from app.dataplane.shared.enums import POOL_ID_TO_STR
 from app.dataplane.proxy.adapters.headers import build_http_headers
 from app.dataplane.proxy import get_proxy_runtime
 from app.dataplane.proxy.adapters.session import (
@@ -190,6 +191,30 @@ def _should_retry_upstream(exc: UpstreamError, retry_codes: frozenset[int]) -> b
 def _feedback_kind(exc: BaseException) -> "FeedbackKind":
     """Map an upstream exception to the appropriate FeedbackKind."""
     return feedback_kind_for_error(exc)
+
+
+def _mask_routed_key(token: str) -> str:
+    return f"{token[:8]}...{token[-8:]}" if len(token) > 20 else token
+
+
+def _set_request_log_routing(
+    routing: dict[str, Any] | None,
+    *,
+    model: str,
+    token: str | None = None,
+    mode_id: int | None = None,
+    pool_id: int | None = None,
+) -> None:
+    if routing is None:
+        return
+    routing["model"] = model
+    if token:
+        routing["routed_key"] = _mask_routed_key(token)
+        routing["routed_key_tail"] = token[-5:]
+    if mode_id is not None:
+        routing["mode_id"] = mode_id
+    if pool_id is not None:
+        routing["pool"] = POOL_ID_TO_STR.get(pool_id, "basic")
 
 
 async def _download_image_bytes(token: str, url: str) -> tuple[bytes, str]:
@@ -458,6 +483,7 @@ async def completions(
     top_p: float = 0.95,
     request_overrides: dict | None = None,
     force_token: str | None = None,
+    request_log_routing: dict[str, Any] | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for /v1/chat/completions.
 
@@ -467,6 +493,7 @@ async def completions(
     """
     cfg = get_config()
     spec = resolve_model(model)
+    _set_request_log_routing(request_log_routing, model=model)
     is_stream = stream if stream is not None else cfg.get_bool("features.stream", True)
     if emit_think is None:
         emit_think = cfg.get_bool("features.thinking", True)
@@ -532,6 +559,13 @@ async def completions(
                     raise RateLimitError("No available accounts for this model tier")
 
                 token = acct.token
+                _set_request_log_routing(
+                    request_log_routing,
+                    model=model,
+                    token=token,
+                    mode_id=selected_mode_id,
+                    pool_id=acct.pool_id,
+                )
                 success = False
                 _retry = False
                 fail_exc: BaseException | None = None
@@ -754,6 +788,13 @@ async def completions(
             raise RateLimitError("No available accounts for this model tier")
 
         token = acct.token
+        _set_request_log_routing(
+            request_log_routing,
+            model=model,
+            token=token,
+            mode_id=selected_mode_id,
+            pool_id=acct.pool_id,
+        )
         success = False
         _retry = False
         fail_exc: BaseException | None = None

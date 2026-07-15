@@ -18,11 +18,18 @@
     .logs-table tr { cursor:pointer }
     .log-path { min-width:320px; max-width:520px; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
     .log-method { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:700 }
+    .log-key-tail { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:650 }
+    .log-pool { text-transform:lowercase; font-weight:650 }
     .log-status { display:inline-flex; align-items:center; height:22px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:700 }
     .log-status.ok { background:#ecfdf5; color:#059669 }
     .log-status.warn { background:#fff7ed; color:#ea580c }
     .log-status.err { background:#fef2f2; color:#dc2626 }
     .log-muted { color:#888 }
+    .pager { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:12px 14px; border-top:1px solid #eee; background:#fff }
+    .pager-info { font-size:12px; color:var(--fg-muted); white-space:nowrap }
+    .pager-btn { height:32px; padding:0 12px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#111; font-size:12px; font-weight:650; cursor:pointer }
+    .pager-btn:hover:not(:disabled) { background:#f5f5f5 }
+    .pager-btn:disabled { color:#aaa; cursor:not-allowed; background:#fafafa }
     .log-detail-modal { width:min(960px,94vw); max-height:88vh; overflow:auto }
     .log-detail-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px }
     .log-detail-actions { display:flex; align-items:center; gap:8px; flex-shrink:0 }
@@ -61,6 +68,8 @@
           <th>时间</th>
           <th>方法</th>
           <th>路径</th>
+          <th>Key后5</th>
+          <th>账号</th>
           <th>状态</th>
           <th>耗时</th>
           <th>入参</th>
@@ -68,9 +77,14 @@
         </tr>
       </thead>
       <tbody id="log-rows">
-        <tr><td colspan="7" class="loading-cell">加载中…</td></tr>
+        <tr><td colspan="9" class="loading-cell">加载中…</td></tr>
       </tbody>
     </table>
+    <div class="pager" id="log-pager">
+      <button type="button" class="pager-btn" id="prev-page">上一页</button>
+      <div class="pager-info" id="pager-info">—</div>
+      <button type="button" class="pager-btn" id="next-page">下一页</button>
+    </div>
   </div>
 </main>
 
@@ -107,6 +121,9 @@
 let adminAuthKey = '';
 let requestLogs = [];
 let retainedDates = [];
+let currentPage = 1;
+let pageSize = 20;
+let totalLogs = 0;
 let activeLogDetail = null;
 
 function esc(value) {
@@ -169,6 +186,7 @@ function buildFullDetail(item) {
     started_at: item.started_at || '',
     client: item.client || '',
     duration_ms: item.duration_ms || 0,
+    routing: item.routing || {},
     request: buildRequestDetail(item),
     response: buildResponseDetail(item),
   };
@@ -245,9 +263,16 @@ async function copyCurl() {
 function renderRows() {
   const rows = document.getElementById('log-rows');
   const count = document.getElementById('log-count');
-  count.textContent = `${requestLogs.length} 条 / 今天和昨天`;
+  const pageCount = Math.max(1, Math.ceil(totalLogs / pageSize));
+  const start = totalLogs ? (currentPage - 1) * pageSize + 1 : 0;
+  const end = Math.min(totalLogs, (currentPage - 1) * pageSize + requestLogs.length);
+
+  count.textContent = `${totalLogs} 条 / 今天和昨天`;
+  document.getElementById('pager-info').textContent = `${start}-${end} / ${totalLogs}，第 ${currentPage}/${pageCount} 页`;
+  document.getElementById('prev-page').disabled = currentPage <= 1;
+  document.getElementById('next-page').disabled = currentPage >= pageCount;
   if (!requestLogs.length) {
-    rows.innerHTML = '<tr><td colspan="7" class="loading-cell">暂无日志</td></tr>';
+    rows.innerHTML = '<tr><td colspan="9" class="loading-cell">暂无日志</td></tr>';
     return;
   }
   rows.innerHTML = requestLogs.map((item, index) => `
@@ -255,6 +280,8 @@ function renderRows() {
       <td>${esc(fmtTime(item.started_at))}</td>
       <td><span class="log-method">${esc(item.method)}</span></td>
       <td class="log-path" title="${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}">${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}</td>
+      <td><span class="log-key-tail">${esc(item.routing?.routed_key_tail || '—')}</span></td>
+      <td><span class="log-pool">${esc(item.routing?.pool || '—')}</span></td>
       <td><span class="log-status ${statusClass(Number(item.status_code || 0))}">${esc(item.status_code)}</span></td>
       <td>${esc(item.duration_ms)} ms</td>
       <td>${fmtBytes(item.request?.bytes)}${item.request?.truncated ? ' <span class="log-muted">截断</span>' : ''}</td>
@@ -266,7 +293,8 @@ function renderRows() {
 }
 
 async function loadLogs() {
-  const res = await fetch(`${ADMIN_API}/request-logs?limit=300`, {
+  const offset = (currentPage - 1) * pageSize;
+  const res = await fetch(`${ADMIN_API}/request-logs?limit=${pageSize}&offset=${offset}`, {
     headers: { Authorization: `Bearer ${adminAuthKey}` },
     cache: 'no-store',
   });
@@ -274,6 +302,12 @@ async function loadLogs() {
   const payload = await res.json();
   retainedDates = payload.retained_dates || [];
   requestLogs = payload.items || [];
+  totalLogs = Number(payload.total || requestLogs.length || 0);
+  const pageCount = Math.max(1, Math.ceil(totalLogs / pageSize));
+  if (currentPage > pageCount) {
+    currentPage = pageCount;
+    return loadLogs();
+  }
   renderRows();
 }
 
@@ -281,13 +315,20 @@ function openDetail(item) {
   if (!item) return;
   activeLogDetail = item;
   const overlay = document.getElementById('detail-overlay');
+  const routing = item.routing || {};
   document.getElementById('detail-title').textContent = `${item.method || ''} ${item.path || ''}`;
-  document.getElementById('detail-meta').innerHTML = [
+  const metaItems = [
     fmtTime(item.started_at),
     `${item.status_code || '—'}`,
     `${item.duration_ms || 0} ms`,
     item.client || 'unknown',
-  ].map((value) => `<span class="log-pill">${esc(value)}</span>`).join('');
+  ];
+  if (routing.model) metaItems.push(`模型 ${routing.model}`);
+  if (routing.routed_key_tail) metaItems.push(`Key后5 ${routing.routed_key_tail}`);
+  if (routing.pool) metaItems.push(`账号 ${routing.pool}`);
+  if (routing.routed_key) metaItems.push(`Key ${routing.routed_key}`);
+  if (routing.mode_id !== undefined && routing.mode_id !== null) metaItems.push(`Mode ${routing.mode_id}`);
+  document.getElementById('detail-meta').innerHTML = metaItems.map((value) => `<span class="log-pill">${esc(value)}</span>`).join('');
   document.getElementById('detail-request').textContent = pretty(buildRequestDetail(item));
   document.getElementById('detail-response').textContent = pretty(buildResponseDetail(item));
   overlay.classList.add('open');
@@ -324,6 +365,17 @@ function waitI18n() {
       window.showToast?.('请求日志加载失败', 'error');
     }
   });
+  document.getElementById('prev-page').addEventListener('click', async () => {
+    if (currentPage <= 1) return;
+    currentPage -= 1;
+    await loadLogs();
+  });
+  document.getElementById('next-page').addEventListener('click', async () => {
+    const pageCount = Math.max(1, Math.ceil(totalLogs / pageSize));
+    if (currentPage >= pageCount) return;
+    currentPage += 1;
+    await loadLogs();
+  });
   document.getElementById('detail-close').addEventListener('click', closeDetail);
   document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
   document.getElementById('copy-all-btn').addEventListener('click', () => copyDetail('all'));
@@ -339,7 +391,7 @@ function waitI18n() {
   try {
     await loadLogs();
   } catch (e) {
-    document.getElementById('log-rows').innerHTML = '<tr><td colspan="7" class="error-cell">加载失败</td></tr>';
+    document.getElementById('log-rows').innerHTML = '<tr><td colspan="9" class="error-cell">加载失败</td></tr>';
     window.showToast?.('请求日志加载失败', 'error');
   }
 })();

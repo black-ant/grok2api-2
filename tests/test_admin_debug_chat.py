@@ -10,6 +10,13 @@ class AdminDebugChatPageTests(unittest.TestCase):
         self.assertNotIn("const result = await apiFetch('/debug/chat'", html)
         self.assertNotIn("token: selectedTokenValue()", html)
 
+    def test_external_auth_select_is_enabled_after_load(self):
+        html = Path("app/statics/admin/debug-chat.html").read_text(encoding="utf-8")
+
+        self.assertIn("select.disabled = false", html)
+        self.assertIn("externalApiKeys = apiKeys(cfg?.app?.api_key)", html)
+        self.assertIn("token-select').addEventListener('change'", html)
+
 
 if __name__ == "__main__":
     unittest.main()

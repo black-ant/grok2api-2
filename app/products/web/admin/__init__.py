@@ -251,13 +251,20 @@ async def runtime_status():
 
 
 @router.get("/request-logs", tags=[_TAG_ADMIN_SYSTEM])
-async def get_request_logs(limit: int = Query(200, ge=1, le=1000)):
+async def get_request_logs(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    total = await request_log_store.count()
     return Response(
         content=orjson.dumps(
             {
                 "retention_days": request_log_store.retention_days,
                 "retained_dates": request_log_store.retained_dates(),
-                "items": await request_log_store.list(limit=limit),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "items": await request_log_store.list(limit=limit, offset=offset),
             }
         ),
         media_type="application/json",

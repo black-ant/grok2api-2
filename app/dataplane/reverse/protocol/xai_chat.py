@@ -114,6 +114,9 @@ def classify_line(line: str | bytes) -> tuple[str, str]:
     return "skip", ""
 
 
+_UPSTREAM_RETURNED_STATUS_RE = re.compile(r"\bupstream returned\s+(\d{3})\b", re.I)
+
+
 def stream_error_from_payload(obj: dict[str, Any]) -> UpstreamError | None:
     """Convert upstream in-band stream error payloads to retryable errors."""
     error = obj.get("error")
@@ -124,7 +127,14 @@ def stream_error_from_payload(obj: dict[str, Any]) -> UpstreamError | None:
     message = str(raw_message)
     code = error.get("code")
     text = message.lower()
-    status = 429 if code == 8 or "too many requests" in text or "rate limit" in text else 502
+    status_match = _UPSTREAM_RETURNED_STATUS_RE.search(message)
+    status = (
+        int(status_match.group(1))
+        if status_match
+        else 429
+        if code == 8 or "too many requests" in text or "rate limit" in text
+        else 502
+    )
 
     try:
         body = orjson.dumps(obj).decode()

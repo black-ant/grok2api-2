@@ -213,8 +213,9 @@ async def _upload_to_data_uri(upload: UploadFile, *, param: str) -> str:
 @router.post(
     "/chat/completions", tags=[_TAG_CHAT], dependencies=[Depends(verify_api_key)]
 )
-async def chat_completions_endpoint(req: ChatCompletionRequest):
+async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request):
     _validate_chat(req)
+    request.state.request_log_routing = {"model": req.model}
     from app.platform.config.snapshot import get_config
 
     cfg = get_config()
@@ -309,6 +310,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest):
                 tool_choice=req.tool_choice,
                 temperature=req.temperature or 0.8,
                 top_p=req.top_p or 0.95,
+                request_log_routing=request.state.request_log_routing,
             )
 
     except AppError:

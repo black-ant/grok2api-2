@@ -225,16 +225,17 @@ class RequestLogStore:
         finally:
             os.close(fd)
 
-    def _read_items_locked(self, *, limit: int) -> list[dict[str, Any]]:
+    def _read_items_locked(self, *, limit: int, offset: int = 0) -> list[dict[str, Any]]:
         self._cleanup_locked()
         items: list[dict[str, Any]] = []
+        read_limit = max(1, limit + max(0, offset))
         for log_date in self.retained_dates():
             path = self._path_for_date(log_date)
             if not path.exists():
                 continue
             try:
                 with path.open("rb") as file:
-                    lines = deque(file, maxlen=limit)
+                    lines = deque(file, maxlen=read_limit)
             except FileNotFoundError:
                 continue
             for line in reversed(lines):
@@ -247,7 +248,8 @@ class RequestLogStore:
                 if isinstance(item, dict):
                     items.append(item)
         items.sort(key=lambda item: float(item.get("created_ts") or 0), reverse=True)
-        return items[:limit]
+        start = max(0, offset)
+        return items[start:start + limit]
 
     def _count_locked(self) -> int:
         self._cleanup_locked()
@@ -267,9 +269,9 @@ class RequestLogStore:
         async with self._lock:
             await asyncio.to_thread(self._write_entry_locked, entry)
 
-    async def list(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    async def list(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
         async with self._lock:
-            return await asyncio.to_thread(self._read_items_locked, limit=limit)
+            return await asyncio.to_thread(self._read_items_locked, limit=limit, offset=offset)
 
     async def count(self) -> int:
         async with self._lock:
@@ -373,6 +375,7 @@ class RequestLogMiddleware:
                 "client": client[0],
                 "status_code": response_status,
                 "duration_ms": duration_ms,
+                "routing": state.get("request_log_routing") or {},
                 "error": error,
                 "handler_error": state.get("request_log_error"),
                 "request": {
