@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 模型映射</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .page-actions { display:flex; gap:8px; align-items:center }
+    .mapping-card { background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.04) }
+    .mapping-form { display:grid; gap:14px }
+    .alias-row { display:grid; grid-template-columns:110px minmax(0,1fr); gap:14px; align-items:start; padding-bottom:14px; border-bottom:1px solid #f0ece4 }
+    .alias-row:last-child { padding-bottom:0; border-bottom:none }
+    .alias-name { display:inline-flex; align-items:center; justify-content:center; height:34px; border-radius:10px; background:#111; color:#fff; -webkit-text-fill-color:#fff; font-weight:800; letter-spacing:.04em }
+    .model-picker { display:grid; gap:8px }
+    .model-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:8px }
+    .model-option { display:flex; align-items:flex-start; gap:8px; min-width:0; padding:10px; border:1px solid #e5ded2; border-radius:12px; background:#fff; cursor:pointer }
+    .model-option:hover { border-color:#cfc5b6; background:#fffdf8 }
+    .model-option input { margin-top:3px; flex:0 0 auto }
+    .model-text { min-width:0; display:grid; gap:3px }
+    .model-id { font-size:12px; font-weight:750; color:#111; overflow-wrap:anywhere }
+    .model-meta { font-size:11px; color:#777 }
+    .model-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+    .model-actions select { height:34px; min-width:260px; max-width:100%; border:1px solid #d8d2c7; border-radius:10px; background:#fff; padding:0 10px; font:inherit }
+    .ordered-list { display:flex; flex-wrap:wrap; gap:6px; min-height:28px }
+    .ordered-item { display:inline-flex; align-items:center; gap:6px; max-width:100%; height:28px; padding:0 8px; border-radius:999px; background:#f3f0e9; color:#222; font-size:12px; font-weight:650 }
+    .ordered-item button { width:18px; height:18px; border-radius:999px; border:0; background:#ddd5c8; color:#111; cursor:pointer }
+    .muted { color:#777; font-size:12px }
+    .status { font-size:12px; color:#777 }
+    .btn-line { height:34px; padding:0 12px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#222; font-weight:650 }
+    .btn-line:hover { background:#f7f3ec }
+    .btn-line:disabled { opacity:.45; pointer-events:none }
+    .btn-primary { height:34px; padding:0 14px; border-radius:10px; background:#111; color:#fff !important; -webkit-text-fill-color:#fff; border:1px solid #111; font-weight:700 }
+    .btn-primary:disabled { opacity:.45; pointer-events:none }
+    @media (max-width: 760px) {
+      .page-hd { align-items:flex-start; flex-direction:column }
+      .alias-row { grid-template-columns:1fr }
+      .alias-name { justify-content:flex-start; padding:0 12px }
+      .model-options { grid-template-columns:1fr }
+    }
+  </style>
+</head>
+<body>
+<div id="admin-header" data-active="/admin/model-mapping"></div>
+
+<main class="admin-main" style="padding-bottom:60px">
+  <div class="page-hd">
+    <div class="page-title">模型映射</div>
+    <div class="page-actions">
+      <span class="status" id="status">加载中…</span>
+      <button class="btn-line" id="reset-btn" type="button" disabled>重置</button>
+      <button class="btn-primary" id="save-btn" type="button" disabled>保存</button>
+    </div>
+  </div>
+
+  <section class="mapping-card">
+    <div class="mapping-form" id="mapping-form"></div>
+  </section>
+</main>
+
+<div id="site-footer"></div>
+
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+<script>
+const VIRTUAL_MODELS = ['FREE', 'SUPER'];
+let adminAuthKey = '';
+let allModels = [];
+let savedAliases = {};
+let draftAliases = {};
+
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (adminAuthKey) headers.Authorization = `Bearer ${adminAuthKey}`;
+  const res = await fetch(`${ADMIN_API}${path}`, { ...options, headers, cache:'no-store' });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const message = typeof body === 'string' ? body : (body?.detail || body?.error?.message || res.statusText);
+    throw new Error(message);
+  }
+  return body;
+}
+
+function normalizeAliases(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const result = {};
+  VIRTUAL_MODELS.forEach((name) => {
+    const items = Array.isArray(source[name]) ? source[name] : [];
+    result[name] = [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))];
+  });
+  return result;
+}
+
+function sameAliases(a, b) {
+  return JSON.stringify(normalizeAliases(a)) === JSON.stringify(normalizeAliases(b));
+}
+
+function modelLabel(item) {
+  const flags = [];
+  if (item.chat) flags.push('chat');
+  if (item.console) flags.push('console');
+  if (item.image) flags.push('image');
+  if (item.image_edit) flags.push('edit');
+  if (item.video) flags.push('video');
+  return `${item.pool}${flags.length ? ' · ' + flags.join(' · ') : ''}`;
+}
+
+function setStatus(text) {
+  document.getElementById('status').textContent = text;
+}
+
+function syncButtons() {
+  const dirty = !sameAliases(savedAliases, draftAliases);
+  document.getElementById('save-btn').disabled = !dirty;
+  document.getElementById('reset-btn').disabled = !dirty;
+  setStatus(dirty ? '存在未保存更改' : '已保存');
+}
+
+function removeCandidate(aliasName, modelId) {
+  draftAliases[aliasName] = (draftAliases[aliasName] || []).filter((item) => item !== modelId);
+  render();
+}
+
+function addCandidate(aliasName) {
+  const select = document.getElementById(`select-${aliasName}`);
+  const modelId = select.value;
+  if (!modelId) return;
+  const items = draftAliases[aliasName] || [];
+  if (!items.includes(modelId)) items.push(modelId);
+  draftAliases[aliasName] = items;
+  select.value = '';
+  render();
+}
+
+function renderAlias(aliasName) {
+  const selected = draftAliases[aliasName] || [];
+  const selectedSet = new Set(selected);
+  const selectedHtml = selected.length
+    ? selected.map((modelId) => `<span class="ordered-item">${esc(modelId)}<button type="button" aria-label="移除 ${esc(modelId)}" onclick="removeCandidate('${esc(aliasName)}','${esc(modelId)}')">×</button></span>`).join('')
+    : '<span class="muted">未配置候选模型</span>';
+  const options = allModels
+    .filter((item) => !selectedSet.has(item.id))
+    .map((item) => `<option value="${esc(item.id)}">${esc(item.id)} · ${esc(modelLabel(item))}</option>`)
+    .join('');
+  return `
+    <div class="alias-row">
+      <div class="alias-name">${esc(aliasName)}</div>
+      <div class="model-picker">
+        <div class="ordered-list">${selectedHtml}</div>
+        <div class="model-actions">
+          <select id="select-${esc(aliasName)}">
+            <option value="">选择真实模型</option>
+            ${options}
+          </select>
+          <button class="btn-line" type="button" onclick="addCandidate('${esc(aliasName)}')">添加</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function render() {
+  document.getElementById('mapping-form').innerHTML = VIRTUAL_MODELS.map(renderAlias).join('');
+  syncButtons();
+}
+
+async function loadMapping() {
+  setStatus('加载中…');
+  const payload = await apiFetch('/model-mapping');
+  allModels = payload?.data?.models || [];
+  savedAliases = normalizeAliases(payload?.data?.aliases);
+  draftAliases = normalizeAliases(savedAliases);
+  render();
+}
+
+async function saveMapping() {
+  const aliases = normalizeAliases(draftAliases);
+  setStatus('保存中…');
+  await apiFetch('/model-mapping', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body:JSON.stringify({ models:{ aliases } }),
+  });
+  savedAliases = normalizeAliases(aliases);
+  draftAliases = normalizeAliases(aliases);
+  render();
+  window.showToast?.('模型映射已保存', 'success');
+}
+
+function waitI18n() {
+  return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
+}
+
+(async () => {
+  await waitI18n();
+  await window.renderAdminHeader?.();
+  await window.renderSiteFooter?.();
+  adminAuthKey = await adminKey.get();
+  if (!adminAuthKey || !await verifyKey(ADMIN_API + '/verify', adminAuthKey).catch(() => false)) {
+    location.href = '/admin/login';
+    return;
+  }
+  document.getElementById('save-btn').addEventListener('click', () => saveMapping().catch((error) => {
+    setStatus('保存失败');
+    window.showToast?.(`保存失败: ${error.message}`, 'error');
+  }));
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    draftAliases = normalizeAliases(savedAliases);
+    render();
+  });
+  try {
+    await loadMapping();
+  } catch (error) {
+    setStatus('加载失败');
+    document.getElementById('mapping-form').innerHTML = `<span class="muted">${esc(error.message)}</span>`;
+    window.showToast?.('模型映射加载失败', 'error');
+  }
+})();
+</script>
+</body>
+</html>

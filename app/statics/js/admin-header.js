@@ -10,7 +10,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
       return 'v1';
     }
   })();
-  const HEADER_TEMPLATE_VERSION = 'debug-chat-nav-1';
+  const HEADER_TEMPLATE_VERSION = 'model-mapping-nav-1';
   const HEADER_HTML_CACHE_KEY = `grok2api.admin_header_html.${scriptVersion}.${HEADER_TEMPLATE_VERSION}`;
   const META_VERSION_CACHE_KEY = `grok2api.meta_version.${scriptVersion}`;
   let appVersion = '';
@@ -600,6 +600,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
             <a href="/admin/debug-chat" class="admin-nav-link" data-nav="/admin/debug-chat">测试对话</a>
             <a href="/admin/request-logs" class="admin-nav-link" data-nav="/admin/request-logs" data-i18n="header.requestLogs">请求日志</a>
             <a href="/admin/config" class="admin-nav-link" data-nav="/admin/config" data-i18n="header.config">配置管理</a>
+            <a href="/admin/model-mapping" class="admin-nav-link" data-nav="/admin/model-mapping">模型映射</a>
             <a href="/admin/cache" class="admin-nav-link" data-nav="/admin/cache" data-i18n="header.cache">缓存管理</a>
           </nav>
           <div class="admin-header-right">

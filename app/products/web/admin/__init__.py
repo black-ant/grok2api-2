@@ -21,6 +21,8 @@ from app.platform.errors import AppError, ErrorKind, ValidationError
 from app.platform.logging.logger import logger, reload_file_logging
 from app.platform.request_logging import request_log_store
 from app.platform.storage import reconcile_local_media_cache_async
+from app.control.model import aliases as model_aliases
+from app.control.model import registry as model_registry
 
 if TYPE_CHECKING:
     from app.control.account.refresh import AccountRefreshService
@@ -273,8 +275,6 @@ async def get_request_logs(
 
 @router.get("/debug/chat/models", tags=[_TAG_ADMIN_SYSTEM])
 async def list_debug_chat_models():
-    from app.control.model import registry as model_registry
-
     models = [
         {
             "id": spec.model_name,
@@ -289,6 +289,60 @@ async def list_debug_chat_models():
         content=orjson.dumps({"object": "list", "data": models}),
         media_type="application/json",
     )
+
+
+@router.get("/model-mapping", tags=[_TAG_ADMIN_SYSTEM])
+async def get_model_mapping():
+    aliases = model_aliases.alias_map()
+    models = [
+        {
+            "id": spec.model_name,
+            "name": spec.public_name,
+            "pool": spec.pool_name(),
+            "capability": int(spec.capability),
+            "console": spec.is_console_chat(),
+            "image": spec.is_image(),
+            "image_edit": spec.is_image_edit(),
+            "video": spec.is_video(),
+            "chat": spec.is_chat(),
+        }
+        for spec in model_registry.list_enabled()
+    ]
+    return Response(
+        content=orjson.dumps({
+            "object": "model_mapping",
+            "data": {
+                "aliases": aliases,
+                "models": models,
+            },
+        }),
+        media_type="application/json",
+    )
+
+
+@router.post("/model-mapping", tags=[_TAG_ADMIN_SYSTEM])
+async def update_model_mapping(req: ConfigPatchRequest):
+    patch = req.root
+    aliases = patch.get("models", {}).get("aliases") if isinstance(patch, dict) else None
+    if not isinstance(aliases, dict):
+        raise ValidationError("models.aliases must be an object", param="models.aliases")
+
+    normalized: dict[str, list[str]] = {}
+    for virtual_model, real_models in aliases.items():
+        name = str(virtual_model).strip()
+        if not name:
+            continue
+        if isinstance(real_models, list):
+            candidates = [str(item).strip() for item in real_models if str(item).strip()]
+        elif isinstance(real_models, str):
+            candidates = [item.strip() for item in real_models.split(",") if item.strip()]
+        else:
+            candidates = []
+        normalized[name] = candidates
+
+    await config.update({"models": {"aliases": normalized}})
+    await config.load()
+    return {"status": "success", "message": "模型映射已更新"}
 
 
 @router.get("/debug/chat/tokens", tags=[_TAG_ADMIN_SYSTEM])

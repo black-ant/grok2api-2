@@ -14,7 +14,7 @@ from app.platform.auth.middleware import verify_api_key
 from app.platform.errors import AppError, ValidationError
 from app.platform.logging.logger import logger
 from app.platform.storage import image_files_dir, video_files_dir
-from app.control.model import registry as model_registry
+from app.control.model import aliases as model_aliases
 from app.control.model.spec import ModelSpec
 from app.control.account.quota_defaults import supports_mode
 from .schemas import (
@@ -56,6 +56,15 @@ def _model_available_for_pools(spec: ModelSpec, pools: frozenset[str]) -> bool:
     return False
 
 
+async def _resolve_model_for_request(model_name: str, request: Request | None = None):
+    pools = await _available_pools(request) if request is not None else None
+    return model_aliases.resolve(
+        model_name,
+        available_pools=pools,
+        is_available=_model_available_for_pools,
+    )
+
+
 # ---------------------------------------------------------------------------
 # /v1/models
 # ---------------------------------------------------------------------------
@@ -68,14 +77,16 @@ async def list_models(request: Request):
     pools = await _available_pools(request)
     models = [
         {
-            "id": m.model_name,
+            "id": resolved.requested_model,
             "object": "model",
             "created": int(time.time()),
             "owned_by": "xai",
-            "name": m.public_name,
+            "name": resolved.requested_model,
         }
-        for m in model_registry.list_enabled()
-        if _model_available_for_pools(m, pools)
+        for resolved in model_aliases.list_virtual_models(
+            available_pools=pools,
+            is_available=_model_available_for_pools,
+        )
     ]
     return JSONResponse({"object": "list", "data": models})
 
@@ -86,9 +97,13 @@ async def list_models(request: Request):
 async def get_model_endpoint(model_id: str, request: Request):
     import time
 
-    spec = model_registry.get(model_id)
     pools = await _available_pools(request)
-    if spec is None or not _model_available_for_pools(spec, pools):
+    resolved = model_aliases.resolve(
+        model_id,
+        available_pools=pools,
+        is_available=_model_available_for_pools,
+    )
+    if resolved is None:
         return JSONResponse(
             {
                 "error": {
@@ -100,11 +115,11 @@ async def get_model_endpoint(model_id: str, request: Request):
         )
     return JSONResponse(
         {
-            "id": spec.model_name,
+            "id": resolved.requested_model,
             "object": "model",
             "created": int(time.time()),
             "owned_by": "xai",
-            "name": spec.public_name,
+            "name": resolved.requested_model if resolved.is_virtual else resolved.spec.public_name,
         }
     )
 
@@ -148,13 +163,6 @@ _LITE_IMAGE_MODELS = {"grok-imagine-image-lite"}
 def _validate_chat(req: ChatCompletionRequest) -> None:
     from app.platform.errors import ValidationError
 
-    spec = model_registry.get(req.model)
-    if spec is None or not spec.enabled:
-        raise ValidationError(
-            f"Model {req.model!r} does not exist or you do not have access to it.",
-            param="model",
-            code="model_not_found",
-        )
     if not req.messages:
         raise ValidationError("messages cannot be empty", param="messages")
     for i, msg in enumerate(req.messages):
@@ -215,7 +223,21 @@ async def _upload_to_data_uri(upload: UploadFile, *, param: str) -> str:
 )
 async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request):
     _validate_chat(req)
-    request.state.request_log_routing = {"model": req.model}
+    resolved = await _resolve_model_for_request(req.model, request)
+    if resolved is None:
+        raise ValidationError(
+            f"Model {req.model!r} does not exist or you do not have access to it.",
+            param="model",
+            code="model_not_found",
+        )
+    real_model = resolved.model
+    spec = resolved.spec
+    request.state.request_log_routing = {
+        "model": req.model,
+        "resolved_model": real_model,
+    }
+    if resolved.is_virtual:
+        request.state.request_log_routing["virtual_model"] = req.model
     from app.platform.config.snapshot import get_config
 
     cfg = get_config()
@@ -223,13 +245,6 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
         req.stream if req.stream is not None else cfg.get_bool("features.stream", True)
     )
 
-    spec = model_registry.get(req.model)
-    if spec is None:
-        raise ValidationError(
-            f"Model {req.model!r} does not exist or you do not have access to it.",
-            param="model",
-            code="model_not_found",
-        )
     messages = [m.model_dump(exclude_none=True) for m in req.messages]
 
     try:
@@ -240,7 +255,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
             cfg = req.image_config or ImageConfig()
             _validate_image_edit_n(cfg.n or 1, param="image_config.n")
             result = await img_edit(
-                model=req.model,
+                model=real_model,
                 messages=messages,
                 n=cfg.n or 1,
                 size=cfg.size or "1024x1024",
@@ -256,7 +271,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
             size = cfg.size or "1024x1024"
             fmt = cfg.response_format or "url"
             n = cfg.n or 1
-            _validate_image_n(req.model, n, param="image_config.n")
+            _validate_image_n(real_model, n, param="image_config.n")
             # Extract prompt from last user message.
             prompt = next(
                 (
@@ -269,7 +284,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
                 "",
             )
             result = await img_gen(
-                model=req.model,
+                model=real_model,
                 prompt=prompt or "",
                 n=n,
                 size=size,
@@ -286,7 +301,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
 
             _validate_video_length(vcfg.seconds or 6)
             result = await vid_comp(
-                model=req.model,
+                model=real_model,
                 messages=messages,
                 stream=is_stream,
                 seconds=vcfg.seconds or 6,
@@ -302,7 +317,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
             else:
                 emit_think = req.reasoning_effort != "none"
             result = await chat_completions(
-                model=req.model,
+                model=real_model,
                 messages=messages,
                 stream=is_stream,
                 emit_think=emit_think,
@@ -318,7 +333,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     except Exception as exc:
         logger.exception(
             "chat completions endpoint failed: model={} stream={} error={}",
-            req.model,
+            real_model,
             is_stream,
             exc,
         )
@@ -376,12 +391,12 @@ async def _safe_sse_responses(stream) -> AsyncGenerator[str, None]:
 @router.post(
     "/responses", tags=[_TAG_RESPONSES], dependencies=[Depends(verify_api_key)]
 )
-async def responses_endpoint(req: ResponsesCreateRequest):
+async def responses_endpoint(req: ResponsesCreateRequest, request: Request):
     from app.platform.config.snapshot import get_config
     from app.platform.errors import ValidationError as _ValidationError
 
-    spec = model_registry.get(req.model)
-    if spec is None or not spec.enabled:
+    resolved = await _resolve_model_for_request(req.model, request)
+    if resolved is None:
         raise _ValidationError(
             f"Model {req.model!r} does not exist or you do not have access to it.",
             param="model",
@@ -407,7 +422,7 @@ async def responses_endpoint(req: ResponsesCreateRequest):
     from .responses import create as responses_create
 
     result = await responses_create(
-        model=req.model,
+        model=resolved.model,
         input_val=req.input,
         instructions=req.instructions,
         stream=is_stream,
@@ -435,18 +450,18 @@ async def responses_endpoint(req: ResponsesCreateRequest):
 @router.post(
     "/images/generations", tags=[_TAG_IMAGES], dependencies=[Depends(verify_api_key)]
 )
-async def image_generations(req: ImageGenerationRequest):
-    spec = model_registry.get(req.model)
-    if spec is None or not spec.enabled or not spec.is_image():
+async def image_generations(req: ImageGenerationRequest, request: Request):
+    resolved = await _resolve_model_for_request(req.model, request)
+    if resolved is None or not resolved.spec.is_image():
         raise ValidationError(
             f"Model {req.model!r} is not an image model", param="model"
         )
-    _validate_image_n(req.model, req.n or 1, param="n")
+    _validate_image_n(resolved.model, req.n or 1, param="n")
 
     from .images import generate as img_gen
 
     result = await img_gen(
-        model=req.model,
+        model=resolved.model,
         prompt=req.prompt,
         n=req.n or 1,
         size=req.size or "1024x1024",
@@ -464,6 +479,7 @@ async def image_generations(req: ImageGenerationRequest):
 
 @router.post("/videos", tags=[_TAG_VIDEOS], dependencies=[Depends(verify_api_key)])
 async def videos_create(
+    request: Request,
     model: Annotated[str, Form(...)],
     prompt: Annotated[str, Form(...)],
     seconds: Annotated[int, Form()] = 6,
@@ -480,6 +496,13 @@ async def videos_create(
 ):
     from .video import create_video
 
+    requested_model = model or "grok-video"
+    resolved = await _resolve_model_for_request(requested_model, request)
+    if resolved is None or not resolved.spec.is_video():
+        raise ValidationError(
+            f"Model {requested_model!r} is not a video model", param="model"
+        )
+
     references_payload = None
     if input_reference:
         references_payload = [
@@ -488,7 +511,7 @@ async def videos_create(
         ]
 
     result = await create_video(
-        model=model or "grok-video",
+        model=resolved.model,
         prompt=prompt,
         seconds=seconds,
         size=size or "720x1280",
@@ -529,6 +552,7 @@ async def videos_content(video_id: str):
     "/images/edits", tags=[_TAG_IMAGES], dependencies=[Depends(verify_api_key)]
 )
 async def image_edits(
+    request: Request,
     model: Annotated[str, Form(...)],
     prompt: Annotated[str, Form(...)],
     image: Annotated[list[UploadFile], File(..., alias="image[]")],
@@ -537,8 +561,8 @@ async def image_edits(
     size: Annotated[str, Form()] = "1024x1024",
     response_format: Annotated[str, Form()] = "url",
 ):
-    spec = model_registry.get(model)
-    if spec is None or not spec.enabled or not spec.is_image_edit():
+    resolved = await _resolve_model_for_request(model, request)
+    if resolved is None or not resolved.spec.is_image_edit():
         raise ValidationError(
             f"Model {model!r} is not an image-edit model", param="model"
         )
@@ -560,7 +584,7 @@ async def image_edits(
     )
     messages = [{"role": "user", "content": content}]
     result = await img_edit(
-        model=model,
+        model=resolved.model,
         messages=messages,
         n=n,
         size=size,

@@ -207,7 +207,10 @@ def _set_request_log_routing(
 ) -> None:
     if routing is None:
         return
-    routing["model"] = model
+    if routing.get("virtual_model"):
+        routing["resolved_model"] = model
+    else:
+        routing["model"] = model
     if token:
         routing["routed_key"] = _mask_routed_key(token)
         routing["routed_key_tail"] = token[-5:]

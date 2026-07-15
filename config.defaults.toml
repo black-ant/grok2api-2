@@ -44,6 +44,13 @@ show_search_sources = false
 # 全局附加指令
 custom_instruction = ""
 
+
+# ==================== 模型映射 ====================
+[models.aliases]
+# 客户端只需要配置这两个虚拟模型名。服务端按顺序选择第一个可用真实模型。
+FREE = ["grok-4.3-console", "grok-4.20-0309-console"]
+SUPER = ["grok-4.20-auto", "grok-4.3-beta"]
+
 # 图片返回格式
 #   grok_url  — 直接返回 Grok CDN URL
 #   local_url — 下载后存本地，返回本地代理 URL

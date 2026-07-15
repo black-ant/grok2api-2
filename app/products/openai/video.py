@@ -29,7 +29,7 @@ from app.platform.logging.logger import logger
 from app.platform.runtime.clock import now_s
 from app.platform.storage import save_local_video
 from app.control.account.enums import FeedbackKind
-from app.control.model import registry as model_registry
+from app.control.model import aliases as model_aliases
 from app.control.model.registry import resolve as resolve_model
 from app.dataplane.proxy import get_proxy_runtime
 from app.dataplane.proxy.adapters.headers import build_http_headers
@@ -750,7 +750,10 @@ async def _run_video_with_account(
 ) -> Any:
     cfg = get_config()
     timeout_s = cfg.get_float("video.timeout", 180.0)
-    spec = resolve_model(model)
+    resolved = model_aliases.resolve(model)
+    if resolved is None:
+        raise ValidationError(f"Model {model!r} is not a video model", param="model")
+    spec = resolved.spec
     if not spec.is_video():
         raise ValidationError(f"Model {model!r} is not a video model", param="model")
 
@@ -923,9 +926,10 @@ async def create_video(
     preset: str | None = None,
     input_references: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    spec = model_registry.get(model)
-    if spec is None or not spec.enabled or not spec.is_video():
+    resolved = model_aliases.resolve(model)
+    if resolved is None or not resolved.spec.is_video():
         raise ValidationError(f"Model {model!r} is not a video model", param="model")
+    real_model = resolved.model
 
     cleaned_prompt = (prompt or "").strip()
     if not cleaned_prompt:
@@ -940,7 +944,7 @@ async def create_video(
 
     job = _VideoJob(
         id=f"video_{uuid.uuid4().hex}",
-        model=model,
+        model=real_model,
         prompt=cleaned_prompt,
         seconds=str(normalized_seconds),
         size=normalized_size,
