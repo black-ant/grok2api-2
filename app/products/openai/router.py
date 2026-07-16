@@ -15,6 +15,7 @@ from app.platform.errors import AppError, ValidationError
 from app.platform.logging.logger import logger
 from app.platform.storage import image_files_dir, video_files_dir
 from app.control.model import aliases as model_aliases
+from app.control.model import registry as model_registry
 from app.control.model.spec import ModelSpec
 from app.control.account.quota_defaults import supports_mode
 from .schemas import (
@@ -75,11 +76,12 @@ async def list_models(request: Request):
     import time
 
     pools = await _available_pools(request)
-    models = [
+    created = int(time.time())
+    virtual_models = [
         {
             "id": resolved.requested_model,
             "object": "model",
-            "created": int(time.time()),
+            "created": created,
             "owned_by": "xai",
             "name": resolved.requested_model,
         }
@@ -88,7 +90,17 @@ async def list_models(request: Request):
             is_available=_model_available_for_pools,
         )
     ]
-    return JSONResponse({"object": "list", "data": models})
+    models = [
+        {
+            "id": spec.model_name,
+            "object": "model",
+            "created": created,
+            "owned_by": "xai",
+            "name": spec.public_name,
+        }
+        for spec in model_registry.list_enabled()
+    ]
+    return JSONResponse({"object": "list", "data": [*virtual_models, *models]})
 
 
 @router.get(

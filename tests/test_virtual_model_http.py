@@ -35,6 +35,8 @@ class VirtualModelHttpTests(unittest.IsolatedAsyncioTestCase):
         payload = response.body.decode("utf-8")
         self.assertIn('"FREE"', payload)
         self.assertIn('"SUPER"', payload)
+        self.assertIn('"grok-4.3-console"', payload)
+        self.assertIn('"grok-4.20-auto"', payload)
 
     async def test_chat_completion_free_maps_to_real_model(self):
         request = _Request(app=SimpleNamespace(state=SimpleNamespace(repository=None)), state=_RequestState())
