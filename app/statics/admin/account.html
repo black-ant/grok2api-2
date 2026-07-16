@@ -986,6 +986,7 @@
         <tr>
           <th style="width:36px"><input type="checkbox" class="cb" id="cb-all" onchange="toggleAll(this.checked)"></th>
           <th style="width:200px" data-i18n="account.colToken">Token</th>
+          <th style="width:180px" data-i18n="account.colEmail">邮箱</th>
           <th class="table-center" style="width:70px" data-i18n="account.colType">类型</th>
           <th class="table-center" style="width:70px" data-i18n="account.colStatus">状态</th>
           <th data-quota-only>
@@ -1017,8 +1018,8 @@
     <div class="modal-title" data-i18n="account.addTitle">添加账户</div>
     <div class="dialog-body">
       <div>
-        <div class="dialog-help" data-i18n="account.addHint">每行一个 Token，已存在的会自动跳过</div>
-        <textarea class="input dialog-textarea" id="import-tokens" rows="8" placeholder="粘贴 Token，每行一个..." data-i18n-placeholder="account.addPlaceholder"></textarea>
+        <div class="dialog-help" data-i18n="account.addHint">每行一个 Token 或 Token | 邮箱，已存在的会自动跳过</div>
+        <textarea class="input dialog-textarea" id="import-tokens" rows="8" placeholder="粘贴 Token 或 Token | 邮箱，每行一个..." data-i18n-placeholder="account.addPlaceholder"></textarea>
       </div>
       <div class="dialog-field">
         <span class="dialog-label" data-i18n="account.labelType">类型</span>
@@ -1044,7 +1045,7 @@
   <div class="modal">
     <div class="modal-title" data-i18n="account.importTitle">导入文件</div>
     <div class="dialog-body">
-      <div class="dialog-help" id="import-file-hint" data-i18n="account.importHintDefault">支持 .txt（每行一个 Token）或 .json（{pool:[tokens]} 格式）</div>
+      <div class="dialog-help" id="import-file-hint" data-i18n="account.importHintDefault">支持 .txt（每行 Token 或 Token | 邮箱）或 .json（{pool:[tokens]} 格式）</div>
       <div class="dialog-field">
         <span class="dialog-label" data-i18n="account.labelFile">文件</span>
         <input class="import-file-input" id="import-file" type="file" accept=".txt,.json,text/plain,application/json" onchange="updateImportFileState()">
@@ -1492,7 +1493,7 @@ function renderTable(view = getTokenView()) {
 
   document.getElementById('tbody').innerHTML = slice.length
     ? slice.map(rowHtml).join('')
-    : `<tr><td colspan="10" class="empty-state">${tr('account.empty', null, '暂无 Token，请点击右上角导入或添加。')}</td></tr>`;
+    : `<tr><td colspan="11" class="empty-state">${tr('account.empty', null, '暂无 Token，请点击右上角导入或添加。')}</td></tr>`;
 
   $('pagi-page', tr('account.pageIndicator', { current: total ? curPage : 0, total: pages }, `第 ${total ? curPage : 0} / ${pages} 页`));
   $('section-table-count', total);
@@ -1509,6 +1510,7 @@ function rowHtml(t) {
   const isRefreshing = refreshingTokens.has(t.token);
   const success = t.use_count || 0;
   const fail = t.fail_count || 0;
+  const email = t.email || '';
   const nsfwBtn = isNsfw
     ? `<button type="button" class="row-nsfw-btn is-on" ${canManageNsfw ? `data-nsfw-token="${xe(t.token)}" data-nsfw-enabled="false"` : 'disabled'} data-tip="${xe(canManageNsfw ? tr('account.batchNsfwDisable', null, '关闭 NSFW') : tr('account.rowActionNotSupported', null, '当前状态不支持此操作'))}" aria-label="${xe(canManageNsfw ? tr('account.batchNsfwDisable', null, '关闭 NSFW') : tr('account.rowActionNotSupported', null, '当前状态不支持此操作'))}">
         <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -1531,6 +1533,7 @@ function rowHtml(t) {
           <svg viewBox="0 0 24 24" stroke-width="1.8"><rect x="9" y="9" width="10" height="10" rx="2"/><path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"/></svg>
         </button>
       </div></td>
+    <td style="font-size:12px;color:#6f6f6f">${email ? xe(email) : '<span style="color:#b8b8b8">-</span>'}</td>
     <td class="table-center"><span class="badge badge-${t.pool||'basic'}">${xe(poolLabel(t.pool || 'basic'))}</span></td>
     <td class="table-center">${statusBadge(t.status)}</td>
     <td data-quota-only><div class="quota-cell">${qpills(q)}</div></td>
@@ -1654,7 +1657,22 @@ function fmtRate(success, fail) {
   return `${Math.round(success / total * 100)}%`;
 }
 function mask(t) { return t.length > 20 ? t.slice(0,8) + '…' + t.slice(-8) : t; }
-function xe(s) { return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+function xe(s) { return String(s ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function parseTokenLine(line) {
+  const raw = String(line || '').trim();
+  if (!raw) return null;
+  const parts = raw.split('|');
+  const token = parts.shift().trim();
+  const email = parts.join('|').trim();
+  if (!token) return null;
+  return email ? { token, email } : token;
+}
+function parseTokenLines(raw) {
+  return String(raw || '').split(/\r?\n/).map(parseTokenLine).filter(Boolean);
+}
+function tokenImportCount(items) {
+  return Array.isArray(items) ? items.filter(Boolean).length : 0;
+}
 function fmtDate(d) {
   if (!d) return tr('account.na', null, '—');
   const dt = new Date(typeof d === 'number' ? d : d);
@@ -1723,7 +1741,7 @@ async function doAdd() {
   const raw  = document.getElementById('import-tokens').value;
   const pool = document.getElementById('import-pool').value;
   const autoNsfw = document.getElementById('import-auto-nsfw').checked;
-  const newToks = raw.split('\n').map(s => s.trim()).filter(Boolean);
+  const newToks = parseTokenLines(raw);
   if (!newToks.length) return showToast(tr('account.enterToken', null, '请输入 Token'), 'error');
   return saveTokens(
     pool,
@@ -1749,7 +1767,7 @@ async function doImport() {
     try { parsed = JSON.parse(raw); } catch { return showToast(tr('account.jsonInvalid', null, 'JSON 格式错误'), 'error'); }
     if (typeof parsed !== 'object' || Array.isArray(parsed)) return showToast(tr('account.jsonShapeInvalid', null, 'JSON 格式不正确，应为 {pool:[tokens]} 结构'), 'error');
     let total = 0;
-    Object.values(parsed).forEach(arr => { if (Array.isArray(arr)) total += arr.length; });
+    Object.values(parsed).forEach(arr => { if (Array.isArray(arr)) total += tokenImportCount(arr); });
     if (!total) return showToast(tr('account.jsonEmpty', null, 'JSON 文件中没有可导入的 Token'), 'error');
     try {
       showToast(tr('account.importing', { n: total }, `正在导入 ${total} 个账户…`), 'info');
@@ -1761,7 +1779,7 @@ async function doImport() {
   } else {
     // TXT 格式: 每行一个 token
     const pool = document.getElementById('import-file-pool').value;
-    const newToks = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const newToks = parseTokenLines(raw);
     if (!newToks.length) return showToast(tr('account.fileEmpty', null, '文件中没有可导入的 Token'), 'error');
     return saveTokens(
       pool,
@@ -1806,7 +1824,12 @@ function updateImportFileState() {
 }
 
 async function saveTokens(pool, newToks, autoNsfw, modalId, pendingMessage, successPrefix, errorPrefix) {
-  const unique = [...new Set(newToks)];
+  const byToken = new Map();
+  newToks.forEach(item => {
+    const token = typeof item === 'string' ? item : item.token;
+    if (token && !byToken.has(token)) byToken.set(token, item);
+  });
+  const unique = [...byToken.values()];
   try {
     showToast(pendingMessage, 'info');
     const d = await _api('POST', `/tokens/add?auto_nsfw=${autoNsfw}`, { pool, tokens: unique });
@@ -1828,12 +1851,12 @@ function doExport() {
   document.getElementById('exp-json-btn').onclick = () => {
     closeModal('modal-export');
     const out = {};
-    tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,tags:t.tags||[]}));
+    tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,email:t.email||'',tags:t.tags||[]}));
     _download(JSON.stringify(out,null,2), `tokens-${currentFilterSuffix()}.json`, 'application/json');
   };
   document.getElementById('exp-txt-btn').onclick = () => {
     closeModal('modal-export');
-    _download(tokens.map(t => t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
+    _download(tokens.map(t => t.email ? `${t.token} | ${t.email}` : t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
   };
 }
 

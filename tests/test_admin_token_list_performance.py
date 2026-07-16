@@ -9,6 +9,7 @@ from app.control.account.models import AccountPage, AccountRecord
 from app.control.account.backends.local import LocalAccountRepository
 from app.control.account.commands import AccountPatch, AccountUpsert
 from app.control.account.enums import AccountStatus
+from app.control.account.models import AccountMutationResult
 from app.products.web.admin import tokens as admin_tokens
 
 
@@ -110,7 +111,51 @@ class AdminTokenListPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0]["fail_count"], 2)
         self.assertEqual(items[0]["quota"]["console"], {"remaining": 4, "total": 5})
         self.assertEqual(items[0]["tags"], ["nsfw"])
+        self.assertEqual(items[0]["email"], "")
         self.assertNotIn("ext", items[0])
+
+    async def test_local_repository_token_payload_includes_email_from_ext(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LocalAccountRepository(Path(tmp) / "accounts.db")
+            await repo.initialize()
+            await repo.upsert_accounts([
+                AccountUpsert(token="tok-1", pool="basic", ext={"email": "user@example.com"}),
+            ])
+
+            items = await repo.list_token_payloads()
+
+        self.assertEqual(items[0]["email"], "user@example.com")
+
+    async def test_add_tokens_accepts_token_pipe_email(self):
+        class _Repo:
+            def __init__(self) -> None:
+                self.upserts = []
+
+            async def get_accounts(self, tokens):
+                return []
+
+            async def upsert_accounts(self, upserts):
+                self.upserts = upserts
+                return AccountMutationResult(upserted=len(upserts))
+
+        class _Refresh:
+            async def refresh_many(self, *args, **kwargs):
+                return None
+
+        repo = _Repo()
+
+        response = await admin_tokens.add_tokens(
+            req=admin_tokens.AddTokensRequest(tokens=["tok-1 | user@example.com", "tok-2"]),
+            repo=repo,
+            refresh_svc=_Refresh(),
+        )
+
+        body = orjson.loads(response.body)
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(repo.upserts[0].token, "tok-1")
+        self.assertEqual(repo.upserts[0].ext, {"email": "user@example.com"})
+        self.assertEqual(repo.upserts[1].token, "tok-2")
+        self.assertEqual(repo.upserts[1].ext, {})
 
     async def test_local_repository_tolerates_legacy_blank_quota_json(self):
         with tempfile.TemporaryDirectory() as tmp:

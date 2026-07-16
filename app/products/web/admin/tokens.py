@@ -73,8 +73,14 @@ class ReplacePoolRequest(BaseModel):
     tags: list[str] = []
 
 
+class TokenImportItem(BaseModel):
+    token: str
+    email: str | None = None
+    tags: list[str] = []
+
+
 class AddTokensRequest(BaseModel):
-    tokens: list[str]
+    tokens: list[str | TokenImportItem]
     pool: str = "basic"
     tags: list[str] = []
 
@@ -93,11 +99,6 @@ class ToggleTokenDisabledRequest(BaseModel):
 class ToggleTokensDisabledRequest(BaseModel):
     tokens: list[str]
     disabled: bool
-
-
-class TokenImportItem(BaseModel):
-    token: str
-    tags: list[str] = []
 
 
 class SaveTokensRequest(RootModel[dict[str, list[str | TokenImportItem]]]):
@@ -124,6 +125,7 @@ def _quota_brief(q: dict) -> dict:
 def _serialize_record(r) -> dict:
     return {
         "token":       r.token,
+        "email":       (r.ext or {}).get("email") or "",
         "pool":        r.pool or "basic",
         "status":      r.status,
         "quota":       _quota_brief(r.quota) if isinstance(r.quota, dict) else {},
@@ -137,6 +139,29 @@ def _serialize_record(r) -> dict:
 def _json(data) -> Response:
     """orjson fast-path response."""
     return Response(content=orjson.dumps(data), media_type="application/json")
+
+
+def _sanitize_email(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _parse_token_import_item(item: str | TokenImportItem | dict) -> tuple[str, str, list[str]]:
+    if isinstance(item, str):
+        token_part, sep, email_part = item.partition("|")
+        return _sanitize(token_part), _sanitize_email(email_part) if sep else "", []
+
+    td = item.model_dump() if isinstance(item, TokenImportItem) else dict(item or {})
+    token_val = str(td.get("token", ""))
+    token_part, sep, email_part = token_val.partition("|")
+    email_val = td.get("email")
+    if sep and not email_val:
+        email_val = email_part
+    tags = td.get("tags") or []
+    return _sanitize(token_part), _sanitize_email(email_val), tags if isinstance(tags, list) else []
+
+
+def _account_ext(email: str) -> dict:
+    return {"email": email} if email else {}
 
 
 def _fire_and_forget(coro) -> asyncio.Task:
@@ -225,11 +250,15 @@ async def save_tokens(
     for pool_name, items in req.root.items():
         upserts = []
         for item in items:
-            td = {"token": item} if isinstance(item, str) else item.model_dump()
-            token_val = _sanitize(td.get("token", ""))
+            token_val, email, tags = _parse_token_import_item(item)
             if not token_val:
                 continue
-            upserts.append(AccountUpsert(token=token_val, pool=pool_name, tags=td.get("tags") or []))
+            upserts.append(AccountUpsert(
+                token=token_val,
+                pool=pool_name,
+                tags=tags,
+                ext=_account_ext(email),
+            ))
         if upserts:
             await repo.replace_pool(BulkReplacePoolCommand(pool=pool_name, upserts=upserts))
             all_tokens.extend(u.token for u in upserts)
@@ -256,25 +285,30 @@ async def add_tokens(
     requested_pool = (req.pool or "basic").strip().lower()
 
     # Deduplicate and sanitize input
-    cleaned: list[str] = []
+    cleaned: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for token in req.tokens:
-        tok = _sanitize(token)
+    for item in req.tokens:
+        tok, email, _tags = _parse_token_import_item(item)
         if tok and tok not in seen:
             seen.add(tok)
-            cleaned.append(tok)
+            cleaned.append((tok, email))
     if not cleaned:
         raise ValidationError("No valid tokens provided", param="tokens")
 
     # Only upsert tokens that are not already active — avoids overwriting quota/status.
     # Soft-deleted tokens are treated as non-existing so they can be restored.
-    existing = {r.token for r in await repo.get_accounts(cleaned) if not r.is_deleted()}
-    new_tokens = [t for t in cleaned if t not in existing]
+    cleaned_tokens = [token for token, _email in cleaned]
+    existing = {r.token for r in await repo.get_accounts(cleaned_tokens) if not r.is_deleted()}
+    new_items = [(token, email) for token, email in cleaned if token not in existing]
+    new_tokens = [token for token, _email in new_items]
 
     if not new_tokens:
         return _json({"status": "success", "count": 0, "skipped": len(cleaned)})
 
-    upserts = [AccountUpsert(token=t, pool=requested_pool, tags=req.tags) for t in new_tokens]
+    upserts = [
+        AccountUpsert(token=token, pool=requested_pool, tags=req.tags, ext=_account_ext(email))
+        for token, email in new_items
+    ]
     result = await repo.upsert_accounts(upserts)
     logger.info(
         "admin tokens added: pool={} added_count={} skipped_count={}",

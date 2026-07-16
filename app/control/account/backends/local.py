@@ -186,6 +186,16 @@ class LocalAccountRepository:
         return tags if isinstance(tags, list) else []
 
     @staticmethod
+    def _parse_email(raw: Any) -> str:
+        try:
+            ext = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            return ""
+        if not isinstance(ext, dict):
+            return ""
+        return str(ext.get("email") or "").strip()
+
+    @staticmethod
     def _payload_int(value: Any) -> int:
         return int(value or 0)
 
@@ -203,6 +213,7 @@ class LocalAccountRepository:
 
         return {
             "token": row["token"],
+            "email": cls._parse_email(row["ext"]),
             "pool": row["pool"] or "basic",
             "status": row["status"],
             "quota": quota,
@@ -584,6 +595,7 @@ class LocalAccountRepository:
                 pool,
                 status,
                 tags,
+                ext,
                 usage_use_count,
                 usage_fail_count,
                 last_use_at,
