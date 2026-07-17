@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - Grok 能力检测</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .cap-status { font-size:12px; color:#777 }
+    .cap-card { max-width:720px; background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,23,42,.04) }
+    .cap-form { display:grid; gap:14px }
+    .field { display:grid; gap:6px }
+    .field label { font-size:12px; font-weight:800; color:#222 }
+    .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
+    .scope-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px }
+    .scope-card { min-height:74px; display:grid; align-content:center; gap:5px; padding:12px; border:1px solid #d8d2c7; border-radius:12px; background:#fff; cursor:pointer }
+    .scope-card input { position:absolute; opacity:0; pointer-events:none }
+    .scope-name { font-size:13px; font-weight:800; color:#111 }
+    .scope-count { font-size:12px; color:#666 }
+    .scope-card.is-active { border-color:#000; box-shadow:inset 0 0 0 1px #000 }
+    .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px }
+    .cap-actions .btn { min-width:104px }
+    .cap-note { font-size:12px; color:#666 }
+    @media (max-width: 760px) {
+      .page-hd { align-items:flex-start; flex-direction:column }
+      .scope-grid { grid-template-columns:1fr }
+    }
+  </style>
+</head>
+<body>
+
+<div id="admin-header" data-active="/admin/grok-capability"></div>
+
+<main class="admin-main" style="padding-bottom:60px">
+  <div class="page-hd">
+    <div class="page-title">Grok 能力检测</div>
+    <div class="cap-status" id="cap-status">加载中…</div>
+  </div>
+
+  <section class="cap-card">
+    <form class="cap-form" id="cap-form">
+      <div class="field">
+        <label for="token-select">Grok 账号</label>
+        <select id="token-select" required disabled>
+          <option value="">加载中…</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>检测范围</label>
+        <div class="scope-grid" id="scope-grid">
+          <label class="scope-card is-active" data-scope-card="console">
+            <input type="radio" name="scope" value="console" checked>
+            <span class="scope-name">Console 模型</span>
+            <span class="scope-count" id="console-count">0 个</span>
+          </label>
+          <label class="scope-card" data-scope-card="chat">
+            <input type="radio" name="scope" value="chat">
+            <span class="scope-name">Grok 对话模型</span>
+            <span class="scope-count" id="chat-count">0 个</span>
+          </label>
+          <label class="scope-card" data-scope-card="all">
+            <input type="radio" name="scope" value="all">
+            <span class="scope-name">全部对话模型</span>
+            <span class="scope-count" id="all-count">0 个</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="cap-actions">
+        <button type="submit" class="btn btn-primary" id="scan-btn" disabled>开始检测</button>
+        <button type="button" class="btn btn-ghost" id="reload-btn">重新加载</button>
+        <span class="cap-note" id="model-note">按顺序请求上游</span>
+      </div>
+    </form>
+  </section>
+</main>
+
+<script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+<script>
+let adminAuthKey = '';
+let accounts = [];
+let models = [];
+
+function esc(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setStatus(text) {
+  document.getElementById('cap-status').textContent = text;
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { Authorization: `Bearer ${adminAuthKey}`, ...(options.headers || {}) };
+  const res = await fetch(`${ADMIN_API}${path}`, { ...options, headers, cache: 'no-store' });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const message = typeof body === 'string' ? body : (body?.detail || body?.error?.message || res.statusText);
+    const error = new Error(message);
+    error.status = res.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
+}
+
+function selectedScope() {
+  return document.querySelector('input[name="scope"]:checked')?.value || 'console';
+}
+
+function scopeModels(scope = selectedScope()) {
+  if (scope === 'console') return models.filter((item) => item.kind === 'console');
+  if (scope === 'chat') return models.filter((item) => item.kind === 'chat');
+  return models;
+}
+
+function renderScopeCounts() {
+  const consoleModels = scopeModels('console');
+  const chatModels = scopeModels('chat');
+  document.getElementById('console-count').textContent = `${consoleModels.length} 个`;
+  document.getElementById('chat-count').textContent = `${chatModels.length} 个`;
+  document.getElementById('all-count').textContent = `${models.length} 个`;
+  document.getElementById('model-note').textContent = `将检测 ${scopeModels().length} 个模型`;
+}
+
+function renderScopeCards() {
+  const scope = selectedScope();
+  document.querySelectorAll('[data-scope-card]').forEach((card) => {
+    card.classList.toggle('is-active', card.dataset.scopeCard === scope);
+  });
+  renderScopeCounts();
+}
+
+function renderAccounts() {
+  const select = document.getElementById('token-select');
+  select.innerHTML = accounts.length
+    ? accounts.map((item) => `<option value="${esc(item.id)}">${esc(item.label)}</option>`).join('')
+    : '<option value="">无账号</option>';
+  select.disabled = !accounts.length;
+  document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
+}
+
+async function loadOptions() {
+  setStatus('加载中…');
+  const payload = await apiFetch('/grok-capability/options');
+  accounts = payload.accounts || [];
+  models = payload.models || [];
+  renderAccounts();
+  renderScopeCounts();
+  setStatus(accounts.length ? '选择账号后开始检测' : '没有可检测账号');
+}
+
+async function runScan() {
+  const tokenId = document.getElementById('token-select').value;
+  const selectedModels = scopeModels().map((item) => item.id);
+  if (!tokenId || !selectedModels.length) return;
+
+  const button = document.getElementById('scan-btn');
+  button.disabled = true;
+  setStatus(`检测中：${selectedModels.length} 个模型`);
+  window.showToast?.('检测已开始', 'success');
+  try {
+    const report = await apiFetch('/grok-capability/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token_id: tokenId, models: selectedModels }),
+    });
+    sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
+    location.href = '/admin/grok-capability/report';
+  } catch (error) {
+    setStatus(`检测失败：${error.message}`);
+    window.showToast?.('检测失败', 'error');
+  } finally {
+    button.disabled = !accounts.length || !models.length;
+  }
+}
+
+function waitI18n() {
+  return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
+}
+
+(async () => {
+  await waitI18n();
+  await window.renderAdminHeader?.();
+  await window.renderSiteFooter?.();
+
+  adminAuthKey = await adminKey.get();
+  if (!adminAuthKey || !await verifyKey(ADMIN_API + '/verify', adminAuthKey).catch(() => false)) {
+    location.href = '/admin/login';
+    return;
+  }
+
+  document.getElementById('cap-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await runScan();
+  });
+  document.getElementById('reload-btn').addEventListener('click', () => loadOptions().catch((error) => {
+    setStatus(`加载失败：${error.message}`);
+    window.showToast?.('加载失败', 'error');
+  }));
+  document.querySelectorAll('input[name="scope"]').forEach((item) => {
+    item.addEventListener('change', renderScopeCards);
+  });
+
+  try {
+    await loadOptions();
+  } catch (error) {
+    setStatus(`加载失败：${error.message}`);
+    window.showToast?.('加载失败', 'error');
+  }
+})();
+</script>
+</body>
+</html>

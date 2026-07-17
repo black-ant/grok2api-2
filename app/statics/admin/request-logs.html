@@ -17,6 +17,7 @@
     .logs-table td { white-space:nowrap }
     .logs-table tr { cursor:pointer }
     .log-path { min-width:320px; max-width:520px; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+    .log-model { min-width:180px; max-width:260px; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:650 }
     .log-method { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:700 }
     .log-key-tail { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:650 }
     .log-pool { text-transform:lowercase; font-weight:650 }
@@ -68,6 +69,7 @@
           <th>时间</th>
           <th>方法</th>
           <th>路径</th>
+          <th>模型</th>
           <th>Key后5</th>
           <th>账号</th>
           <th>状态</th>
@@ -77,7 +79,7 @@
         </tr>
       </thead>
       <tbody id="log-rows">
-        <tr><td colspan="9" class="loading-cell">加载中…</td></tr>
+        <tr><td colspan="10" class="loading-cell">加载中…</td></tr>
       </tbody>
     </table>
     <div class="pager" id="log-pager">
@@ -148,6 +150,19 @@ function statusClass(status) {
   if (status >= 500) return 'err';
   if (status >= 400) return 'warn';
   return 'ok';
+}
+
+function actualModel(item) {
+  const routing = item?.routing || {};
+  return routing.resolved_model || routing.model || '—';
+}
+
+function modelTitle(item) {
+  const routing = item?.routing || {};
+  const actual = actualModel(item);
+  if (routing.virtual_model && routing.virtual_model !== actual) return `${actual} / 请求 ${routing.virtual_model}`;
+  if (routing.model && routing.model !== actual) return `${actual} / 请求 ${routing.model}`;
+  return actual;
 }
 
 function pretty(value) {
@@ -272,7 +287,7 @@ function renderRows() {
   document.getElementById('prev-page').disabled = currentPage <= 1;
   document.getElementById('next-page').disabled = currentPage >= pageCount;
   if (!requestLogs.length) {
-    rows.innerHTML = '<tr><td colspan="9" class="loading-cell">暂无日志</td></tr>';
+    rows.innerHTML = '<tr><td colspan="10" class="loading-cell">暂无日志</td></tr>';
     return;
   }
   rows.innerHTML = requestLogs.map((item, index) => `
@@ -280,6 +295,7 @@ function renderRows() {
       <td>${esc(fmtTime(item.started_at))}</td>
       <td><span class="log-method">${esc(item.method)}</span></td>
       <td class="log-path" title="${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}">${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}</td>
+      <td class="log-model" title="${esc(modelTitle(item))}">${esc(actualModel(item))}</td>
       <td><span class="log-key-tail">${esc(item.routing?.routed_key_tail || '—')}</span></td>
       <td><span class="log-pool">${esc(item.routing?.pool || '—')}</span></td>
       <td><span class="log-status ${statusClass(Number(item.status_code || 0))}">${esc(item.status_code)}</span></td>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - Grok 检测报告</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .report-status { font-size:12px; color:#777 }
+    .report-card { background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.04); margin-bottom:14px }
+    .summary-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px }
+    .summary-item { border:1px solid #ebe5dc; border-radius:12px; padding:12px; background:#fff }
+    .summary-label { font-size:11px; color:#666; margin-bottom:6px }
+    .summary-value { font-size:20px; font-weight:800; color:#111; line-height:1.1 }
+    .report-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px }
+    .report-actions { display:flex; align-items:center; gap:8px }
+    .table-card { border-radius:14px }
+    table { font-size:13px }
+    th, td { padding:10px 12px; border-bottom:1px solid #eee8df; text-align:left; vertical-align:top }
+    th { font-size:12px; color:#555; background:#fbfaf7; white-space:nowrap }
+    td { color:#222 }
+    tr:last-child td { border-bottom:0 }
+    .status-pill { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; font-size:11px; font-weight:750; white-space:nowrap }
+    .status-available { background:#ecfdf3; color:#087443 }
+    .status-rate_limited { background:#fff7ed; color:#b45309 }
+    .status-forbidden,.status-unauthorized { background:#fef2f2; color:#b91c1c }
+    .status-unavailable { background:#f3f4f6; color:#374151 }
+    .status-unknown { background:#f5f3ff; color:#5b21b6 }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px }
+    .muted { color:#666 }
+    .empty-card { max-width:640px; background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:18px; display:grid; gap:12px }
+    @media (max-width: 860px) {
+      .page-hd { align-items:flex-start; flex-direction:column }
+      .summary-row { grid-template-columns:repeat(2,minmax(0,1fr)) }
+      .report-head { align-items:flex-start; flex-direction:column }
+    }
+  </style>
+</head>
+<body>
+
+<div id="admin-header" data-active="/admin/grok-capability"></div>
+
+<main class="admin-main" style="padding-bottom:60px">
+  <div class="page-hd">
+    <div class="page-title">Grok 检测报告</div>
+    <div class="report-status" id="report-status">读取报告…</div>
+  </div>
+
+  <section class="empty-card" id="empty-card" hidden>
+    <div>没有检测报告。</div>
+    <div><a class="btn btn-primary" href="/admin/grok-capability">开始检测</a></div>
+  </section>
+
+  <section id="report-view" hidden>
+    <section class="report-card">
+      <div class="summary-row">
+        <div class="summary-item">
+          <div class="summary-label">账号</div>
+          <div class="summary-value mono" id="summary-token">—</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">模型总数</div>
+          <div class="summary-value" id="summary-total">0</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">可用</div>
+          <div class="summary-value" id="summary-available">0</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">失败</div>
+          <div class="summary-value" id="summary-failed">0</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="report-card">
+      <div class="report-head">
+        <div class="report-status" id="report-meta">—</div>
+        <div class="report-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="copy-report-btn">复制报告</button>
+          <a class="btn btn-primary btn-sm" href="/admin/grok-capability">重新检测</a>
+        </div>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>HTTP</th>
+              <th>耗时</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+<script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+<script>
+let adminAuthKey = '';
+let report = null;
+
+function esc(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setStatus(text) {
+  document.getElementById('report-status').textContent = text;
+}
+
+function fmtTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+}
+
+function statusLabel(status) {
+  const labels = {
+    available: '可用',
+    unauthorized: '鉴权失败',
+    forbidden: '禁止访问',
+    rate_limited: '限流/配额',
+    unavailable: '不可用',
+    unknown: '未知',
+  };
+  return labels[status] || status || '未知';
+}
+
+function resultMessage(item) {
+  if (item.status === 'available') return item.response_preview || 'OK';
+  const parts = [];
+  if (item.message) parts.push(item.message);
+  if (item.body_preview) parts.push(item.body_preview);
+  return parts.join(' · ') || '—';
+}
+
+function renderReport() {
+  if (!report || !Array.isArray(report.results)) {
+    document.getElementById('empty-card').hidden = false;
+    document.getElementById('report-view').hidden = true;
+    setStatus('没有报告');
+    return;
+  }
+
+  const summary = report.summary || {};
+  document.getElementById('empty-card').hidden = true;
+  document.getElementById('report-view').hidden = false;
+  document.getElementById('summary-token').textContent = report.token?.label || '—';
+  document.getElementById('summary-total').textContent = summary.total ?? report.results.length;
+  document.getElementById('summary-available').textContent = summary.available ?? 0;
+  document.getElementById('summary-failed').textContent = summary.failed ?? 0;
+  document.getElementById('report-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
+  document.getElementById('result-body').innerHTML = report.results.map((item) => `
+    <tr>
+      <td><div>${esc(item.name || item.id)}</div><div class="mono muted">${esc(item.id)}</div></td>
+      <td>${esc(item.kind || 'chat')}</td>
+      <td><span class="status-pill status-${esc(item.status || 'unknown')}">${esc(statusLabel(item.status))}</span></td>
+      <td class="mono">${esc(item.http_status ?? '—')}</td>
+      <td class="mono">${esc(item.duration_ms ?? 0)} ms</td>
+      <td>${esc(resultMessage(item))}</td>
+    </tr>
+  `).join('');
+  setStatus('报告已生成');
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const area = document.createElement('textarea');
+  area.value = text;
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  area.remove();
+}
+
+function waitI18n() {
+  return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
+}
+
+(async () => {
+  await waitI18n();
+  await window.renderAdminHeader?.();
+  await window.renderSiteFooter?.();
+
+  adminAuthKey = await adminKey.get();
+  if (!adminAuthKey || !await verifyKey(ADMIN_API + '/verify', adminAuthKey).catch(() => false)) {
+    location.href = '/admin/login';
+    return;
+  }
+
+  try {
+    report = JSON.parse(sessionStorage.getItem('grok_capability_report') || 'null');
+  } catch {
+    report = null;
+  }
+  renderReport();
+
+  document.getElementById('copy-report-btn')?.addEventListener('click', async () => {
+    try {
+      await copyText(JSON.stringify(report || {}, null, 2));
+      window.showToast?.('已复制', 'success');
+    } catch {
+      window.showToast?.('复制失败', 'error');
+    }
+  });
+})();
+</script>
+</body>
+</html>

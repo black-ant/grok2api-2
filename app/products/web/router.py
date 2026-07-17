@@ -73,6 +73,16 @@ async def admin_debug_chat():
     return _serve_html("admin/debug-chat.html")
 
 
+@router.get("/admin/grok-capability", include_in_schema=False)
+async def admin_grok_capability():
+    return _serve_html("admin/grok-capability.html")
+
+
+@router.get("/admin/grok-capability/report", include_in_schema=False)
+async def admin_grok_capability_report():
+    return _serve_html("admin/grok-capability-report.html")
+
+
 # --- WebUI ---
 @router.get("/webui", include_in_schema=False)
 async def webui_root():

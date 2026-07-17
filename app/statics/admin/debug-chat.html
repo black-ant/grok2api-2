@@ -61,11 +61,11 @@
         </select>
       </div>
       <div class="field">
-        <label for="token-select">外部鉴权</label>
+        <label for="token-select">2API 鉴权</label>
         <select id="token-select" disabled>
           <option value="">加载中…</option>
         </select>
-        <input class="manual-token" id="manual-token-input" type="text" placeholder="外部 API key 由 app.api_key 提供" disabled>
+        <input class="manual-token" id="manual-token-input" type="text" placeholder="2API key 由 app.api_key 提供" disabled>
       </div>
     </div>
   </section>
@@ -253,7 +253,7 @@ async function loadExternalAuth() {
   externalApiKey = externalApiKeys[0] || '';
   select.innerHTML = externalApiKeys.length
     ? externalApiKeys.map((key, index) => `<option value="${index}">app.api_key #${index + 1} · ${esc(maskApiKey(key))}</option>`).join('')
-    : '<option value="none">未配置 API key，按免鉴权调用 /v1</option>';
+    : '<option value="none">未配置 2API key，按免鉴权调用 /v1</option>';
   select.disabled = false;
 }
 
@@ -336,7 +336,7 @@ function waitI18n() {
     await loadExternalAuth();
     authReady = true;
   } catch (error) {
-    document.getElementById('token-select').innerHTML = '<option value="">外部鉴权加载失败</option>';
+    document.getElementById('token-select').innerHTML = '<option value="">2API 鉴权加载失败</option>';
   }
   syncManualTokenInput();
   setStatus(modelReady && authReady ? '模型和外部鉴权已加载' : '模型或外部鉴权加载失败');
