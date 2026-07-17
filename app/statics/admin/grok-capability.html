@@ -17,18 +17,10 @@
     .field { display:grid; gap:6px }
     .field label { font-size:12px; font-weight:800; color:#222 }
     .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
-    .scope-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px }
-    .scope-card { min-height:74px; display:grid; align-content:center; gap:5px; padding:12px; border:1px solid #d8d2c7; border-radius:12px; background:#fff; cursor:pointer }
-    .scope-card input { position:absolute; opacity:0; pointer-events:none }
-    .scope-name { font-size:13px; font-weight:800; color:#111 }
-    .scope-count { font-size:12px; color:#666 }
-    .scope-card.is-active { border-color:#000; box-shadow:inset 0 0 0 1px #000 }
     .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px }
     .cap-actions .btn { min-width:104px }
-    .cap-note { font-size:12px; color:#666 }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
-      .scope-grid { grid-template-columns:1fr }
     }
   </style>
 </head>
@@ -45,37 +37,22 @@
   <section class="cap-card">
     <form class="cap-form" id="cap-form">
       <div class="field">
-        <label for="token-select">Grok 账号</label>
+        <label for="token-select">Key</label>
         <select id="token-select" required disabled>
           <option value="">加载中…</option>
         </select>
       </div>
 
       <div class="field">
-        <label>检测范围</label>
-        <div class="scope-grid" id="scope-grid">
-          <label class="scope-card is-active" data-scope-card="console">
-            <input type="radio" name="scope" value="console" checked>
-            <span class="scope-name">Console 模型</span>
-            <span class="scope-count" id="console-count">0 个</span>
-          </label>
-          <label class="scope-card" data-scope-card="chat">
-            <input type="radio" name="scope" value="chat">
-            <span class="scope-name">Grok 对话模型</span>
-            <span class="scope-count" id="chat-count">0 个</span>
-          </label>
-          <label class="scope-card" data-scope-card="all">
-            <input type="radio" name="scope" value="all">
-            <span class="scope-name">全部对话模型</span>
-            <span class="scope-count" id="all-count">0 个</span>
-          </label>
-        </div>
+        <label for="model-select">模型</label>
+        <select id="model-select" required disabled>
+          <option value="">加载中…</option>
+        </select>
       </div>
 
       <div class="cap-actions">
         <button type="submit" class="btn btn-primary" id="scan-btn" disabled>开始检测</button>
         <button type="button" class="btn btn-ghost" id="reload-btn">重新加载</button>
-        <span class="cap-note" id="model-note">按顺序请求上游</span>
       </div>
     </form>
   </section>
@@ -115,33 +92,6 @@ async function apiFetch(path, options = {}) {
   return body;
 }
 
-function selectedScope() {
-  return document.querySelector('input[name="scope"]:checked')?.value || 'console';
-}
-
-function scopeModels(scope = selectedScope()) {
-  if (scope === 'console') return models.filter((item) => item.kind === 'console');
-  if (scope === 'chat') return models.filter((item) => item.kind === 'chat');
-  return models;
-}
-
-function renderScopeCounts() {
-  const consoleModels = scopeModels('console');
-  const chatModels = scopeModels('chat');
-  document.getElementById('console-count').textContent = `${consoleModels.length} 个`;
-  document.getElementById('chat-count').textContent = `${chatModels.length} 个`;
-  document.getElementById('all-count').textContent = `${models.length} 个`;
-  document.getElementById('model-note').textContent = `将检测 ${scopeModels().length} 个模型`;
-}
-
-function renderScopeCards() {
-  const scope = selectedScope();
-  document.querySelectorAll('[data-scope-card]').forEach((card) => {
-    card.classList.toggle('is-active', card.dataset.scopeCard === scope);
-  });
-  renderScopeCounts();
-}
-
 function renderAccounts() {
   const select = document.getElementById('token-select');
   select.innerHTML = accounts.length
@@ -151,30 +101,39 @@ function renderAccounts() {
   document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
 }
 
+function renderModels() {
+  const select = document.getElementById('model-select');
+  select.innerHTML = models.length
+    ? models.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.kind || 'chat')}</option>`).join('')
+    : '<option value="">无模型</option>';
+  select.disabled = !models.length;
+  document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
+}
+
 async function loadOptions() {
   setStatus('加载中…');
   const payload = await apiFetch('/grok-capability/options');
   accounts = payload.accounts || [];
   models = payload.models || [];
   renderAccounts();
-  renderScopeCounts();
-  setStatus(accounts.length ? '选择账号后开始检测' : '没有可检测账号');
+  renderModels();
+  setStatus(accounts.length && models.length ? '选择 Key 和模型后开始检测' : '没有可检测项');
 }
 
 async function runScan() {
   const tokenId = document.getElementById('token-select').value;
-  const selectedModels = scopeModels().map((item) => item.id);
-  if (!tokenId || !selectedModels.length) return;
+  const modelId = document.getElementById('model-select').value;
+  if (!tokenId || !modelId) return;
 
   const button = document.getElementById('scan-btn');
   button.disabled = true;
-  setStatus(`检测中：${selectedModels.length} 个模型`);
+  setStatus('检测中…');
   window.showToast?.('检测已开始', 'success');
   try {
     const report = await apiFetch('/grok-capability/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_id: tokenId, models: selectedModels }),
+      body: JSON.stringify({ token_id: tokenId, models: [modelId] }),
     });
     sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
     location.href = '/admin/grok-capability/report';
@@ -209,9 +168,6 @@ function waitI18n() {
     setStatus(`加载失败：${error.message}`);
     window.showToast?.('加载失败', 'error');
   }));
-  document.querySelectorAll('input[name="scope"]').forEach((item) => {
-    item.addEventListener('change', renderScopeCards);
-  });
 
   try {
     await loadOptions();
