@@ -31,12 +31,13 @@
     .account-email { font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .account-meta { margin-top:4px; font-size:11px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .account-badge { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
-    .batch-modal { width:min(880px,94vw) }
+    #batch-modal { padding:16px; overflow-y:auto }
+    .batch-modal { width:min(880px,94vw); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; overflow:hidden }
     .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
     .batch-head .modal-title { margin-bottom:0 }
     .batch-picks { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
     .batch-status { font-size:12px; color:#666; margin-bottom:10px }
-    .batch-list { max-height:50vh; overflow:auto; display:grid; gap:8px }
+    .batch-list { flex:1 1 0; min-height:0; overflow:auto; display:grid; gap:8px }
     .batch-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff }
     .batch-row.is-selected { border-color:#111 }
     .batch-row.is-running { border-color:#111; background:#fafafa }
@@ -48,10 +49,11 @@
     .batch-pill.is-pass { background:#dcfce7; color:#15803d }
     .batch-pill.is-fail { background:#ffedd5; color:#c2410c }
     .batch-pill.is-running { background:#111; color:#fff }
-    .batch-results { margin-top:12px }
+    .batch-results { margin-top:12px; flex:1 1 0; min-height:0; overflow:auto }
     .batch-result-table { width:100%; border:1px solid #e6dfd4; border-radius:12px; border-spacing:0; overflow:hidden; background:#fff; font-size:12px }
     .batch-result-table th, .batch-result-table td { padding:9px 10px; border-bottom:1px solid #efe8dd; text-align:left; vertical-align:middle }
     .batch-result-table th { background:#faf9f5; color:#555; font-weight:800 }
+    .batch-result-table thead th { position:sticky; top:0; z-index:1 }
     .batch-result-table tr:last-child td { border-bottom:0 }
     .batch-result-table tr.is-pass { background:#ecfdf3 }
     .batch-result-table tr.is-fail { background:#fff7ed }
@@ -63,6 +65,8 @@
       .cap-form { grid-template-columns:1fr }
       .cap-actions { flex-wrap:wrap }
       .cap-status { width:100%; margin-left:0 }
+      #batch-modal { padding:12px }
+      .batch-modal { max-height:calc(100dvh - 24px) }
       .batch-row { grid-template-columns:auto minmax(0,1fr); align-items:start }
       .batch-pill { grid-column:2 }
       .batch-result-table { display:block; overflow-x:auto }
