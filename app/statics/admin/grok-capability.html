@@ -13,7 +13,7 @@
     .page-title { font-size:22px; font-weight:700; line-height:1.2 }
     .cap-status { margin-left:auto; font-size:12px; color:#777; white-space:nowrap }
     .cap-card { width:100%; max-width:none; box-sizing:border-box; background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,23,42,.04) }
-    .cap-form { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.62fr); align-items:end; gap:14px 16px }
+    .cap-form { display:grid; grid-template-columns:1fr; gap:14px }
     .field { display:grid; gap:6px; min-width:0 }
     .field label { font-size:12px; font-weight:800; color:#222 }
     .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
@@ -21,8 +21,25 @@
     .key-display { min-height:40px; display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; box-sizing:border-box; min-width:0; overflow:hidden }
     .key-email { min-width:0; font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .key-meta { flex:0 0 auto; font-size:11px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
-    .cap-actions { grid-column:1 / -1; display:flex; align-items:center; gap:8px; padding-top:2px }
+    .key-picker .btn { height:40px; min-width:104px; padding:0 14px; border-radius:10px; border:1px solid #d8d2c7; background:#fff; color:#111; font-weight:700; box-shadow:inset 0 1px 0 rgba(255,255,255,.8) }
+    .key-picker .btn:hover { background:#fffdf8; border-color:#111 }
+    .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px; flex-wrap:wrap }
     .cap-actions .btn { min-width:104px }
+    .cap-actions .cap-status { margin-left:auto }
+    .scan-result-card { margin-top:14px; border-top:1px solid #eee8df; padding-top:14px; display:grid; gap:12px }
+    .scan-result-head { display:flex; align-items:center; justify-content:space-between; gap:10px }
+    .scan-result-title { font-size:14px; font-weight:850; color:#111 }
+    .scan-result-meta { margin-top:3px; font-size:12px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+    .scan-result-pill { display:inline-flex; align-items:center; height:26px; padding:0 10px; border-radius:999px; font-size:12px; font-weight:800; white-space:nowrap }
+    .scan-result-pill.is-pass { background:#dcfce7; color:#15803d }
+    .scan-result-pill.is-fail { background:#ffedd5; color:#c2410c }
+    .scan-result-grid { display:grid; grid-template-columns:1.4fr .7fr .7fr .7fr; gap:10px }
+    .scan-result-item { min-width:0; border:1px solid #ebe5dc; border-radius:12px; padding:10px 12px; background:#fffdf9 }
+    .scan-result-label { font-size:11px; color:#777; margin-bottom:5px }
+    .scan-result-value { min-width:0; font-size:13px; font-weight:750; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .scan-result-block { border:1px solid #ebe5dc; border-radius:12px; padding:10px 12px; background:#fff }
+    .scan-result-text { font-size:13px; color:#222; white-space:pre-wrap; overflow-wrap:anywhere }
+    .scan-result-text.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px }
     .account-modal { width:min(760px,94vw) }
     .account-list { max-height:58vh; overflow:auto; display:grid; gap:8px }
     .account-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff; cursor:pointer }
@@ -64,7 +81,9 @@
       .page-hd { align-items:flex-start; flex-direction:column }
       .cap-form { grid-template-columns:1fr }
       .cap-actions { flex-wrap:wrap }
-      .cap-status { width:100%; margin-left:0 }
+      .cap-actions .cap-status { width:100%; margin-left:0 }
+      .scan-result-head { align-items:flex-start; flex-direction:column }
+      .scan-result-grid { grid-template-columns:repeat(2,minmax(0,1fr)) }
       #batch-modal { padding:12px }
       .batch-modal { max-height:calc(100dvh - 24px) }
       .batch-row { grid-template-columns:auto minmax(0,1fr); align-items:start }
@@ -109,6 +128,41 @@
         <span class="cap-status" id="cap-status">加载中…</span>
       </div>
     </form>
+    <section class="scan-result-card" id="scan-result-card" hidden>
+      <div class="scan-result-head">
+        <div>
+          <div class="scan-result-title" id="scan-result-title">检测结果</div>
+          <div class="scan-result-meta" id="scan-result-meta">—</div>
+        </div>
+        <span class="scan-result-pill" id="scan-result-pill">—</span>
+      </div>
+      <div class="scan-result-grid">
+        <div class="scan-result-item">
+          <div class="scan-result-label">账号</div>
+          <div class="scan-result-value" id="scan-result-token">—</div>
+        </div>
+        <div class="scan-result-item">
+          <div class="scan-result-label">模型</div>
+          <div class="scan-result-value" id="scan-result-model">—</div>
+        </div>
+        <div class="scan-result-item">
+          <div class="scan-result-label">耗时</div>
+          <div class="scan-result-value" id="scan-result-duration">—</div>
+        </div>
+        <div class="scan-result-item">
+          <div class="scan-result-label">状态</div>
+          <div class="scan-result-value" id="scan-result-status">—</div>
+        </div>
+      </div>
+      <div class="scan-result-block">
+        <div class="scan-result-label">问题</div>
+        <div class="scan-result-text" id="scan-result-question">—</div>
+      </div>
+      <div class="scan-result-block">
+        <div class="scan-result-label">返回</div>
+        <div class="scan-result-text mono" id="scan-result-body">—</div>
+      </div>
+    </section>
   </section>
 </main>
 
@@ -168,6 +222,73 @@ function setStatus(text) {
   document.getElementById('cap-status').textContent = text;
 }
 
+function accountPrimaryLabel(account) {
+  return account?.email || account?.token_mask || account?.id || '';
+}
+
+function accountMetaLabel(account) {
+  if (!account) return '';
+  return [account.email ? account.token_mask || account.id : '', account.pool || 'basic', account.status || '']
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function fmtTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+}
+
+function statusLabel(status) {
+  const labels = {
+    available: '可用',
+    unauthorized: '鉴权失败',
+    forbidden: '禁止访问',
+    rate_limited: '限流/配额',
+    unavailable: '不可用',
+    unknown: '未知',
+  };
+  return labels[status] || status || '未知';
+}
+
+function resultMessage(item) {
+  if (item.status === 'available') return item.response_preview || 'OK';
+  const parts = [];
+  if (item.message) parts.push(item.message);
+  if (item.body_preview) parts.push(item.body_preview);
+  return parts.join(' · ') || '—';
+}
+
+function renderScanResult(report) {
+  const card = document.getElementById('scan-result-card');
+  if (!card) return;
+  if (!report || !Array.isArray(report.results) || !report.results.length) {
+    card.hidden = true;
+    return;
+  }
+
+  const item = report.results[0];
+  const account = accounts.find((entry) => entry.id === selectedAccountId) || null;
+  const summary = report.summary || {};
+  const total = Number(summary.total ?? report.results.length ?? 0);
+  const isPass = item.status === 'available';
+
+  card.hidden = false;
+  document.getElementById('scan-result-title').textContent = '检测结果';
+  document.getElementById('scan-result-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
+
+  const pill = document.getElementById('scan-result-pill');
+  pill.textContent = statusLabel(item.status);
+  pill.className = `scan-result-pill ${isPass ? 'is-pass' : 'is-fail'}`;
+
+  document.getElementById('scan-result-token').textContent = accountPrimaryLabel(account) || report.token?.label || '—';
+  document.getElementById('scan-result-model').textContent = `${item.name || item.id || '—'} · ${item.id || '—'}`;
+  document.getElementById('scan-result-duration').textContent = `${item.duration_ms || report.duration_ms || 0} ms`;
+  document.getElementById('scan-result-status').textContent = total > 1 ? `${summary.available || 0}/${total} 通过` : statusLabel(item.status);
+  document.getElementById('scan-result-question').textContent = report.question || item.question || '—';
+  document.getElementById('scan-result-body').textContent = resultMessage(item);
+}
+
 function normalizeAliases(value) {
   const source = value && typeof value === 'object' ? value : {};
   const result = {};
@@ -201,12 +322,8 @@ function renderAccounts() {
   }
   const account = accounts.find((item) => item.id === selectedAccountId);
   const display = document.getElementById('key-display');
-  const primary = account?.email || account?.token_mask || account?.id || '';
-  const meta = account
-    ? [account.email ? account.token_mask || account.id : '', account.pool || 'basic', account.status || ''].filter(Boolean).join(' · ')
-    : '';
   display.innerHTML = account
-    ? `<div class="key-email">${esc(primary)}</div><div class="key-meta">${esc(meta)}</div>`
+    ? `<div class="key-email">${esc(accountPrimaryLabel(account))}</div><div class="key-meta">${esc(accountMetaLabel(account))}</div>`
     : '<div class="key-email">无账号</div><div class="key-meta">—</div>';
   document.getElementById('open-account-btn').disabled = !accounts.length;
   document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
@@ -232,7 +349,7 @@ function renderAccountList() {
     <button type="button" class="account-row ${item.id === selectedAccountId ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
       <span>
         <span class="account-email">${esc(item.email || item.token_mask || item.id)}</span>
-        <span class="account-meta">${esc([item.email ? item.token_mask || item.id : '', item.pool || 'basic', item.status || ''].filter(Boolean).join(' · '))}</span>
+        <span class="account-meta">${esc(accountMetaLabel(item))}</span>
       </span>
       <span class="account-badge">${esc(item.pool || 'basic')}</span>
     </button>
@@ -529,8 +646,11 @@ async function runScan() {
   try {
     const report = await scanOneModel(tokenId, modelId);
     sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
-    location.href = '/admin/grok-capability/report';
+    renderScanResult(report);
+    setStatus('检测完成');
+    window.showToast?.('检测完成', 'success');
   } catch (error) {
+    renderScanResult(null);
     setStatus(`检测失败：${error.message}`);
     window.showToast?.('检测失败', 'error');
   } finally {
