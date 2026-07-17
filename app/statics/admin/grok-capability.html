@@ -31,7 +31,7 @@
     .account-email { font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .account-meta { margin-top:4px; font-size:11px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .account-badge { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
-    .batch-modal { width:min(760px,94vw) }
+    .batch-modal { width:min(880px,94vw) }
     .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
     .batch-head .modal-title { margin-bottom:0 }
     .batch-picks { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
@@ -48,10 +48,21 @@
     .batch-pill.is-pass { background:#dcfce7; color:#15803d }
     .batch-pill.is-fail { background:#ffedd5; color:#c2410c }
     .batch-pill.is-running { background:#111; color:#fff }
+    .batch-results { margin-top:12px }
+    .batch-result-table { width:100%; border:1px solid #e6dfd4; border-radius:12px; border-spacing:0; overflow:hidden; background:#fff; font-size:12px }
+    .batch-result-table th, .batch-result-table td { padding:9px 10px; border-bottom:1px solid #efe8dd; text-align:left; vertical-align:middle }
+    .batch-result-table th { background:#faf9f5; color:#555; font-weight:800 }
+    .batch-result-table tr:last-child td { border-bottom:0 }
+    .batch-result-table tr.is-pass { background:#ecfdf3 }
+    .batch-result-table tr.is-fail { background:#fff7ed }
+    .result-model { max-width:300px; font-weight:750; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .result-meta { margin-top:3px; color:#666; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .result-actions { display:flex; justify-content:flex-end; gap:6px; white-space:nowrap }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
       .batch-row { grid-template-columns:auto minmax(0,1fr); align-items:start }
       .batch-pill { grid-column:2 }
+      .batch-result-table { display:block; overflow-x:auto }
     }
   </style>
 </head>
@@ -111,12 +122,11 @@
       <button type="button" class="btn btn-ghost btn-sm" data-batch-close>关闭</button>
     </div>
     <div class="batch-picks">
-      <button type="button" class="btn btn-ghost btn-sm" id="add-free-btn">一键加 free</button>
-      <button type="button" class="btn btn-ghost btn-sm" id="add-super-btn">一键加 super</button>
       <button type="button" class="btn btn-ghost btn-sm" id="clear-batch-btn">清空</button>
     </div>
     <div class="batch-status" id="batch-status">选择模型后开始。</div>
     <div class="batch-list" id="batch-model-list"></div>
+    <div class="batch-results" id="batch-results" hidden></div>
     <div class="modal-footer">
       <button type="button" class="btn btn-ghost" id="batch-report-btn" hidden>查看报告</button>
       <button type="button" class="btn btn-primary" id="start-batch-btn">开始批量</button>
@@ -137,6 +147,9 @@ let selectedAccountId = '';
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
+const VIRTUAL_MODEL_ALIASES = ['FREE', 'SUPER'];
+let aliasCache = { FREE: [], SUPER: [] };
+let aliasCacheLoaded = false;
 
 function esc(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -144,6 +157,16 @@ function esc(value) {
 
 function setStatus(text) {
   document.getElementById('cap-status').textContent = text;
+}
+
+function normalizeAliases(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const result = {};
+  VIRTUAL_MODEL_ALIASES.forEach((name) => {
+    const items = Array.isArray(source[name]) ? source[name] : [];
+    result[name] = [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))];
+  });
+  return result;
 }
 
 async function apiFetch(path, options = {}) {
@@ -223,11 +246,6 @@ function closeAccountModal() {
   modal.setAttribute('aria-hidden', 'true');
 }
 
-function modelBatchGroup(item) {
-  if (item.kind === 'console' || item.pool === 'basic') return 'free';
-  return 'super';
-}
-
 function batchItemStatus(modelId) {
   return batchResults.find((item) => item.id === modelId)?.status || 'pending';
 }
@@ -265,6 +283,7 @@ function updateBatchStatus() {
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
   document.getElementById('batch-report-btn').hidden = !batchResults.length;
+  renderBatchResults();
 }
 
 function renderBatchModels(runningModelId = '') {
@@ -278,7 +297,7 @@ function renderBatchModels(runningModelId = '') {
         <input type="checkbox" value="${esc(item.id)}" ${selected ? 'checked' : ''} ${batchRunning ? 'disabled' : ''}>
         <span class="batch-name" title="${esc(item.id)}">
           ${esc(item.name || item.id)}
-          <span class="batch-meta">${esc(item.id)} · ${esc(item.kind || 'chat')} · ${modelBatchGroup(item)}</span>
+          <span class="batch-meta">${esc(item.id)} · ${esc(item.kind || 'chat')} · ${esc(item.pool || 'default')}</span>
         </span>
         <span class="${batchPillClass(status)}">${esc(batchStatusLabel(status))}</span>
       </label>`;
@@ -295,16 +314,116 @@ function renderBatchModels(runningModelId = '') {
   updateBatchStatus();
 }
 
-function selectBatchGroup(group) {
-  models.forEach((item) => {
-    if (modelBatchGroup(item) === group) batchSelection.add(item.id);
+function batchResultText(item) {
+  const parts = [];
+  if (item.http_status) parts.push(`HTTP ${item.http_status}`);
+  if (item.duration_ms) parts.push(`${Math.round(Number(item.duration_ms))}ms`);
+  if (item.message && item.message !== 'OK') parts.push(item.message);
+  return parts.join(' · ') || 'OK';
+}
+
+function aliasHasModel(aliasName, modelId) {
+  return aliasCacheLoaded && (aliasCache[aliasName] || []).includes(modelId);
+}
+
+function renderBatchResults() {
+  const container = document.getElementById('batch-results');
+  if (!container) return;
+  if (batchRunning || !batchResults.length) {
+    container.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  const rows = batchResults.map((item) => {
+    const model = models.find((modelItem) => modelItem.id === item.id) || {};
+    const status = item.status || 'unknown';
+    const canAdd = status === 'available';
+    const modelName = item.name || model.name || item.id;
+    const kind = item.kind || model.kind || 'chat';
+    const pool = item.pool || model.pool || 'default';
+    const freeAdded = aliasHasModel('FREE', item.id);
+    const superAdded = aliasHasModel('SUPER', item.id);
+    return `
+      <tr class="${status === 'available' ? 'is-pass' : 'is-fail'}">
+        <td>
+          <div class="result-model" title="${esc(item.id)}">${esc(modelName)}</div>
+          <div class="result-meta">${esc(item.id)} · ${esc(kind)} · ${esc(pool)}</div>
+        </td>
+        <td><span class="${batchPillClass(status)}">${esc(batchStatusLabel(status))}</span></td>
+        <td>${esc(batchResultText(item))}</td>
+        <td>
+          <div class="result-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="FREE" data-model-id="${esc(item.id)}" ${!canAdd || freeAdded ? 'disabled' : ''}>${freeAdded ? '已在 free' : '加入 free'}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="SUPER" data-model-id="${esc(item.id)}" ${!canAdd || superAdded ? 'disabled' : ''}>${superAdded ? '已在 super' : '加入 super'}</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+  container.innerHTML = `
+    <table class="batch-result-table">
+      <thead>
+        <tr>
+          <th>模型</th>
+          <th>状态</th>
+          <th>结果</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  container.hidden = false;
+  container.querySelectorAll('[data-add-alias]').forEach((button) => {
+    button.addEventListener('click', () => addBatchResultToAlias(button));
   });
-  renderBatchModels();
+}
+
+async function refreshAliasCache() {
+  const payload = await apiFetch('/model-mapping');
+  aliasCache = normalizeAliases(payload?.data?.aliases);
+  aliasCacheLoaded = true;
+  return aliasCache;
+}
+
+async function addModelToAlias(modelId, aliasName) {
+  const payload = await apiFetch('/model-mapping');
+  const aliases = normalizeAliases(payload?.data?.aliases);
+  if ((aliases[aliasName] || []).includes(modelId)) {
+    aliasCache = aliases;
+    aliasCacheLoaded = true;
+    return 'exists';
+  }
+  aliases[aliasName].push(modelId);
+  await apiFetch('/model-mapping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ models: { aliases } }),
+  });
+  aliasCache = normalizeAliases(aliases);
+  aliasCacheLoaded = true;
+  return 'added';
+}
+
+async function addBatchResultToAlias(button) {
+  const modelId = button.dataset.modelId || '';
+  const aliasName = button.dataset.addAlias || '';
+  if (!modelId || !VIRTUAL_MODEL_ALIASES.includes(aliasName)) return;
+  button.disabled = true;
+  try {
+    const result = await addModelToAlias(modelId, aliasName);
+    window.showToast?.(result === 'exists' ? `已在 ${aliasName}` : `已加入 ${aliasName}`, 'success');
+  } catch (error) {
+    window.showToast?.(`加入失败：${error.message}`, 'error');
+  } finally {
+    renderBatchResults();
+  }
 }
 
 function openBatchModal() {
   batchResults = [];
   renderBatchModels();
+  refreshAliasCache().then(renderBatchResults).catch(() => {
+    aliasCacheLoaded = false;
+  });
   const modal = document.getElementById('batch-modal');
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
@@ -432,8 +551,6 @@ function waitI18n() {
     if (event.target === event.currentTarget) closeAccountModal();
   });
   document.getElementById('open-batch-btn').addEventListener('click', openBatchModal);
-  document.getElementById('add-free-btn').addEventListener('click', () => selectBatchGroup('free'));
-  document.getElementById('add-super-btn').addEventListener('click', () => selectBatchGroup('super'));
   document.getElementById('clear-batch-btn').addEventListener('click', () => {
     batchSelection.clear();
     batchResults = [];
