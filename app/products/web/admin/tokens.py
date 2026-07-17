@@ -128,6 +128,7 @@ def _serialize_record(r) -> dict:
         "email":       (r.ext or {}).get("email") or "",
         "pool":        r.pool or "basic",
         "status":      r.status,
+        "created_at":  r.created_at,
         "quota":       _quota_brief(r.quota) if isinstance(r.quota, dict) else {},
         "use_count":   r.usage_use_count or 0,
         "fail_count":  r.usage_fail_count or 0,

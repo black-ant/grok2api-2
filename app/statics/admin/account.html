@@ -234,6 +234,22 @@
       gap:8px;
       flex-wrap:wrap;
     }
+    .toolbar-email-search {
+      width:180px !important;
+      height:28px;
+      border-radius:999px;
+      font:inherit;
+      color:#555;
+      background:#fafafa;
+      border-color:transparent;
+      padding:0 12px;
+    }
+    .toolbar-email-search::placeholder { color:#b0b0b0; }
+    .toolbar-email-search:focus {
+      border-color:#ded8cf;
+      background:#fff;
+      box-shadow:none;
+    }
     .toolbar-icon-btn {
       width:28px;
       height:28px;
@@ -372,6 +388,33 @@
       border-bottom:none;
       letter-spacing:.01em;
     }
+    .sort-th {
+      display:inline-flex;
+      align-items:center;
+      gap:5px;
+      max-width:100%;
+      color:inherit;
+      font:inherit;
+      letter-spacing:inherit;
+      text-align:inherit;
+      white-space:nowrap;
+      vertical-align:middle;
+      border:0;
+      background:transparent;
+      padding:0;
+      cursor:pointer;
+    }
+    .table-center .sort-th { justify-content:center; }
+    .sort-th:hover,
+    .sort-th.is-active { color:#555; }
+    .sort-indicator {
+      width:8px;
+      font-size:9px;
+      line-height:1;
+      color:#b6b6b6;
+      text-align:center;
+    }
+    .sort-th.is-active .sort-indicator { color:#555; }
     td {
       font-size:13px;
       padding:13px 16px;
@@ -871,6 +914,7 @@
       <button onclick="nextPage()" class="pagi-btn" id="btn-next">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
+      <input id="email-search" class="input toolbar-email-search" type="search" autocomplete="off" oninput="setEmailQuery(this.value)" placeholder="邮箱" data-i18n-placeholder="account.emailSearchPlaceholder">
     </div>
     <div class="table-toolbar-actions">
       <div class="toolbar-dropdown" id="filter-menu">
@@ -985,24 +1029,28 @@
       <thead>
         <tr>
           <th style="width:36px"><input type="checkbox" class="cb" id="cb-all" onchange="toggleAll(this.checked)"></th>
-          <th style="width:200px" data-i18n="account.colToken">Token</th>
-          <th style="width:180px" data-i18n="account.colEmail">邮箱</th>
-          <th class="table-center" style="width:70px" data-i18n="account.colType">类型</th>
-          <th class="table-center" style="width:70px" data-i18n="account.colStatus">状态</th>
-          <th data-quota-only>
-            <span data-i18n="account.colQuota">额度</span>
-            <span style="margin-left:6px;display:inline-flex;align-items:center;gap:3px;vertical-align:middle">
-              <span class="q-pill q-a">A</span>
-              <span class="q-pill q-f">F</span>
-              <span class="q-pill q-e">E</span>
-              <span class="q-pill q-h">H</span>
-              <span class="q-pill q-c">C</span>
-            </span>
+          <th style="width:200px" data-sort-key="token" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('token')"><span data-i18n="account.colToken">Token</span><span class="sort-indicator"></span></button></th>
+          <th style="width:180px" data-sort-key="email" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('email')"><span data-i18n="account.colEmail">邮箱</span><span class="sort-indicator"></span></button></th>
+          <th class="table-center" style="width:76px" data-sort-key="created_at" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('created_at')"><span data-i18n="account.colCreatedAt">创建日期</span><span class="sort-indicator"></span></button></th>
+          <th class="table-center" style="width:70px" data-sort-key="pool" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('pool')"><span data-i18n="account.colType">类型</span><span class="sort-indicator"></span></button></th>
+          <th class="table-center" style="width:70px" data-sort-key="status" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('status')"><span data-i18n="account.colStatus">状态</span><span class="sort-indicator"></span></button></th>
+          <th data-quota-only data-sort-key="quota" aria-sort="none">
+            <button type="button" class="sort-th" onclick="switchSort('quota')">
+              <span data-i18n="account.colQuota">额度</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;vertical-align:middle">
+                <span class="q-pill q-a">A</span>
+                <span class="q-pill q-f">F</span>
+                <span class="q-pill q-e">E</span>
+                <span class="q-pill q-h">H</span>
+                <span class="q-pill q-c">C</span>
+              </span>
+              <span class="sort-indicator"></span>
+            </button>
           </th>
-          <th class="table-center" data-i18n="account.colSuccess">成功</th>
-          <th class="table-center" data-i18n="account.colFail">失败</th>
-          <th class="table-center" data-i18n="account.colRate">成功率</th>
-          <th data-i18n="account.colLastUsed">最近使用</th>
+          <th class="table-center" data-sort-key="success" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('success')"><span data-i18n="account.colSuccess">成功</span><span class="sort-indicator"></span></button></th>
+          <th class="table-center" data-sort-key="fail" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('fail')"><span data-i18n="account.colFail">失败</span><span class="sort-indicator"></span></button></th>
+          <th class="table-center" data-sort-key="rate" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('rate')"><span data-i18n="account.colRate">成功率</span><span class="sort-indicator"></span></button></th>
+          <th data-sort-key="last_used_at" aria-sort="none"><button type="button" class="sort-th" onclick="switchSort('last_used_at')"><span data-i18n="account.colLastUsed">最近使用</span><span class="sort-indicator"></span></button></th>
           <th data-i18n="account.colActions">操作</th>
         </tr>
       </thead>
@@ -1127,7 +1175,7 @@
 const PAGE_SIZE_KEY = 'admin.account.page_size';
 const PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000, 2000];
 
-let allTokens = [], curStatus = 'all', curNsfw = 'all', curPool = 'all', curPage = 1, pageSize = loadSavedPageSize();
+let allTokens = [], curStatus = 'all', curNsfw = 'all', curPool = 'all', curEmailQuery = '', curSortKey = '', curSortDir = 'asc', curPage = 1, pageSize = loadSavedPageSize();
 const sel = new Set();
 const refreshingTokens = new Set();
 let _cb = null;
@@ -1256,7 +1304,7 @@ function render() {
 }
 
 function getTokenView() {
-  const cacheKey = `${_tokenViewVersion}|${curStatus}|${curNsfw}|${curPool}`;
+  const cacheKey = `${_tokenViewVersion}|${curStatus}|${curNsfw}|${curPool}|${curEmailQuery}|${curSortKey}|${curSortDir}`;
   if (_tokenViewCache && _tokenViewCacheKey === cacheKey) return _tokenViewCache;
 
   const stats = {
@@ -1286,6 +1334,7 @@ function getTokenView() {
     const invalid = isInvalidStatus(token.status);
     const disabled = isDisabledStatus(token.status);
     const matchesPool = curPool === 'all' || pool === curPool;
+    const matchesEmail = !curEmailQuery || String(token.email || '').toLowerCase().includes(curEmailQuery);
     const matchesStatus = curStatus === 'all'
       || (curStatus === 'invalid' ? invalid : curStatus === 'disabled' ? disabled : token.status === curStatus);
     const matchesNsfw = curNsfw === 'all' || (curNsfw === 'enabled' ? nsfwEnabled : !nsfwEnabled);
@@ -1307,7 +1356,7 @@ function getTokenView() {
     if (invalid) stats.invalid += 1;
     if (disabled) stats.disabled += 1;
 
-    if (matchesPool && matchesNsfw) {
+    if (matchesPool && matchesNsfw && matchesEmail) {
       statusCounts.all += 1;
       if (token.status === 'active') statusCounts.active += 1;
       if (token.status === 'cooling') statusCounts.cooling += 1;
@@ -1315,18 +1364,18 @@ function getTokenView() {
       if (disabled) statusCounts.disabled += 1;
     }
 
-    if (matchesPool && matchesStatus) {
+    if (matchesPool && matchesStatus && matchesEmail) {
       nsfwCounts.all += 1;
       if (nsfwEnabled) nsfwCounts.enabled += 1;
       else nsfwCounts.disabled += 1;
     }
 
-    if (matchesStatus && matchesNsfw) {
+    if (matchesStatus && matchesNsfw && matchesEmail) {
       poolCounts.set('all', poolCounts.get('all') + 1);
       poolCounts.set(pool, (poolCounts.get(pool) || 0) + 1);
     }
 
-    if (matchesPool && matchesStatus && matchesNsfw) filteredItems.push(token);
+    if (matchesPool && matchesStatus && matchesNsfw && matchesEmail) filteredItems.push(token);
   }
 
   if (curPool !== 'all' && !poolsSet.has(curPool)) {
@@ -1334,7 +1383,9 @@ function getTokenView() {
     return getTokenView();
   }
 
-  _tokenViewCacheKey = `${_tokenViewVersion}|${curStatus}|${curNsfw}|${curPool}`;
+  if (curSortKey) sortTokens(filteredItems);
+
+  _tokenViewCacheKey = `${_tokenViewVersion}|${curStatus}|${curNsfw}|${curPool}|${curEmailQuery}|${curSortKey}|${curSortDir}`;
   _tokenViewCache = {
     stats,
     statusCounts,
@@ -1418,7 +1469,7 @@ function syncFilterTrigger() {
   const menu = document.getElementById('filter-menu');
   const trigger = document.getElementById('btn-filter');
   if (!menu || !trigger) return;
-  const active = curStatus !== 'all' || curPool !== 'all' || curNsfw !== 'all' || menu.classList.contains('open');
+  const active = curStatus !== 'all' || curPool !== 'all' || curNsfw !== 'all' || curEmailQuery || menu.classList.contains('open');
   trigger.classList.toggle('is-active', active);
 }
 
@@ -1485,6 +1536,7 @@ function preserveScroll(fn) {
 }
 
 function renderTable(view = getTokenView()) {
+  updateSortHeaders();
   const items = view.filteredItems;
   const total = items.length;
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -1493,7 +1545,7 @@ function renderTable(view = getTokenView()) {
 
   document.getElementById('tbody').innerHTML = slice.length
     ? slice.map(rowHtml).join('')
-    : `<tr><td colspan="11" class="empty-state">${tr('account.empty', null, '暂无 Token，请点击右上角导入或添加。')}</td></tr>`;
+    : `<tr><td colspan="12" class="empty-state">${tr('account.empty', null, '暂无 Token，请点击右上角导入或添加。')}</td></tr>`;
 
   $('pagi-page', tr('account.pageIndicator', { current: total ? curPage : 0, total: pages }, `第 ${total ? curPage : 0} / ${pages} 页`));
   $('section-table-count', total);
@@ -1534,6 +1586,7 @@ function rowHtml(t) {
         </button>
       </div></td>
     <td style="font-size:12px;color:#6f6f6f">${email ? xe(email) : '<span style="color:#b8b8b8">-</span>'}</td>
+    <td class="table-center" style="font-size:12px;color:#9a9a9a;font-variant-numeric:tabular-nums">${fmtYYMMDD(t.created_at)}</td>
     <td class="table-center"><span class="badge badge-${t.pool||'basic'}">${xe(poolLabel(t.pool || 'basic'))}</span></td>
     <td class="table-center">${statusBadge(t.status)}</td>
     <td data-quota-only><div class="quota-cell">${qpills(q)}</div></td>
@@ -1609,6 +1662,26 @@ function switchPool(pool) {
     renderTable();
   });
 }
+function switchSort(key) {
+  if (!key) return;
+  if (curSortKey === key) curSortDir = curSortDir === 'asc' ? 'desc' : 'asc';
+  else {
+    curSortKey = key;
+    curSortDir = defaultSortDir(key);
+  }
+  curPage = 1;
+  sel.clear();
+  renderTable();
+}
+function setEmailQuery(value) {
+  const next = String(value || '').trim().toLowerCase();
+  if (curEmailQuery === next) return;
+  curEmailQuery = next;
+  curPage = 1;
+  sel.clear();
+  renderFilters();
+  renderTable();
+}
 function prevPage() { if (curPage > 1) { curPage--; renderTable(); } }
 function nextPage() {
   const pages = Math.max(1, Math.ceil(getTokenView().filteredItems.length / pageSize));
@@ -1642,6 +1715,61 @@ function updateBatchBtns() {
   
   globalBtns.forEach(id => document.getElementById(id).style.display = show ? 'none' : '');
   selectionBtns.forEach(id => document.getElementById(id).style.display = show ? '' : 'none');
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('[data-sort-key]').forEach(th => {
+    const active = th.dataset.sortKey === curSortKey;
+    const button = th.querySelector('.sort-th');
+    const indicator = th.querySelector('.sort-indicator');
+    th.setAttribute('aria-sort', active ? (curSortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+    if (button) button.classList.toggle('is-active', active);
+    if (indicator) indicator.textContent = active ? (curSortDir === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+function defaultSortDir(key) {
+  return ['created_at', 'quota', 'success', 'fail', 'rate', 'last_used_at'].includes(key) ? 'desc' : 'asc';
+}
+
+function sortTokens(items) {
+  const direction = curSortDir === 'desc' ? -1 : 1;
+  items.sort((a, b) => {
+    const valueA = sortValue(a, curSortKey);
+    const valueB = sortValue(b, curSortKey);
+    const cmp = compareSortValues(valueA, valueB);
+    if (cmp !== 0) return cmp * direction;
+    return String(a.token || '').localeCompare(String(b.token || ''), undefined, { sensitivity:'base', numeric:true });
+  });
+}
+
+function sortValue(t, key) {
+  if (key === 'token') return String(t.token || '').toLowerCase();
+  if (key === 'email') return String(t.email || '').toLowerCase();
+  if (key === 'created_at') return Number(t.created_at || 0);
+  if (key === 'pool') return { basic: 1, super: 2, heavy: 3 }[t.pool || 'basic'] || 99;
+  if (key === 'status') return { active: 1, cooling: 2, disabled: 3, expired: 4, invalid: 5 }[t.status] || 99;
+  if (key === 'quota') return quotaSortValue(t.quota || {});
+  if (key === 'success') return Number(t.use_count || 0);
+  if (key === 'fail') return Number(t.fail_count || 0);
+  if (key === 'rate') return rateSortValue(t.use_count || 0, t.fail_count || 0);
+  if (key === 'last_used_at') return Number(t.last_used_at || 0);
+  return '';
+}
+
+function compareSortValues(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { sensitivity:'base', numeric:true });
+}
+
+function quotaSortValue(quota) {
+  return ['auto', 'fast', 'expert', 'heavy', 'grok_4_3', 'console']
+    .reduce((total, mode) => total + Number(quota[mode]?.remaining || 0), 0);
+}
+
+function rateSortValue(success, fail) {
+  const total = Number(success || 0) + Number(fail || 0);
+  return total ? Number(success || 0) / total : -1;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1679,6 +1807,15 @@ function fmtDate(d) {
   return isNaN(dt)
     ? tr('account.na', null, '—')
     : dt.toLocaleDateString(I18n.getLang() === 'en' ? 'en-US' : 'zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function fmtYYMMDD(d) {
+  if (!d) return tr('account.na', null, '—');
+  const dt = new Date(typeof d === 'number' ? d : d);
+  if (isNaN(dt)) return tr('account.na', null, '—');
+  const yy = String(dt.getFullYear() % 100).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}${mm}${dd}`;
 }
 function statusBadge(s) {
   const m = {
