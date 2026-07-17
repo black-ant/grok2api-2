@@ -149,6 +149,19 @@ function resultMessage(item) {
   return parts.join(' · ') || '—';
 }
 
+function summaryQuestionText() {
+  if (report.question) return report.question;
+  if ((report.results || []).length > 1) return '每个模型随机抽题';
+  return report.results?.[0]?.question || '—';
+}
+
+function summaryStatusText() {
+  const summary = report.summary || {};
+  const total = Number(summary.total ?? report.results.length ?? 0);
+  if (total > 1) return `${summary.available || 0}/${total} 通过`;
+  return statusLabel(report.results?.[0]?.status);
+}
+
 function renderReport() {
   if (!report || !Array.isArray(report.results)) {
     document.getElementById('empty-card').hidden = false;
@@ -157,12 +170,11 @@ function renderReport() {
     return;
   }
 
-  const firstResult = report.results[0] || {};
   document.getElementById('empty-card').hidden = true;
   document.getElementById('report-view').hidden = false;
   document.getElementById('summary-token').textContent = report.token?.label || '—';
-  document.getElementById('summary-question').textContent = report.question || firstResult.question || '—';
-  document.getElementById('summary-status').textContent = statusLabel(firstResult.status);
+  document.getElementById('summary-question').textContent = summaryQuestionText();
+  document.getElementById('summary-status').textContent = summaryStatusText();
   document.getElementById('summary-duration').textContent = `${report.duration_ms || 0} ms`;
   document.getElementById('report-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
   document.getElementById('result-body').innerHTML = report.results.map((item) => `

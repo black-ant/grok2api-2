@@ -19,8 +19,27 @@
     .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
     .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px }
     .cap-actions .btn { min-width:104px }
+    .batch-modal { width:min(760px,94vw) }
+    .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
+    .batch-head .modal-title { margin-bottom:0 }
+    .batch-picks { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
+    .batch-status { font-size:12px; color:#666; margin-bottom:10px }
+    .batch-list { max-height:50vh; overflow:auto; display:grid; gap:8px }
+    .batch-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff }
+    .batch-row.is-selected { border-color:#111 }
+    .batch-row.is-running { border-color:#111; background:#fafafa }
+    .batch-row.is-pass { border-color:#86efac; background:#ecfdf3 }
+    .batch-row.is-fail { border-color:#fed7aa; background:#fff7ed }
+    .batch-name { min-width:0; font-size:13px; font-weight:750; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .batch-meta { margin-top:4px; font-size:11px; color:#666; font-weight:500 }
+    .batch-pill { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; font-size:11px; font-weight:750; background:#f3f4f6; color:#374151; white-space:nowrap }
+    .batch-pill.is-pass { background:#dcfce7; color:#15803d }
+    .batch-pill.is-fail { background:#ffedd5; color:#c2410c }
+    .batch-pill.is-running { background:#111; color:#fff }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
+      .batch-row { grid-template-columns:auto minmax(0,1fr); align-items:start }
+      .batch-pill { grid-column:2 }
     }
   </style>
 </head>
@@ -52,11 +71,32 @@
 
       <div class="cap-actions">
         <button type="submit" class="btn btn-primary" id="scan-btn" disabled>开始检测</button>
+        <button type="button" class="btn btn-ghost" id="open-batch-btn" disabled>批量检测</button>
         <button type="button" class="btn btn-ghost" id="reload-btn">重新加载</button>
       </div>
     </form>
   </section>
 </main>
+
+<div class="modal-overlay" id="batch-modal" aria-hidden="true">
+  <div class="modal batch-modal" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
+    <div class="batch-head">
+      <div class="modal-title" id="batch-modal-title">批量检测</div>
+      <button type="button" class="btn btn-ghost btn-sm" data-batch-close>关闭</button>
+    </div>
+    <div class="batch-picks">
+      <button type="button" class="btn btn-ghost btn-sm" id="add-free-btn">一键加 free</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="add-super-btn">一键加 super</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="clear-batch-btn">清空</button>
+    </div>
+    <div class="batch-status" id="batch-status">选择模型后开始。</div>
+    <div class="batch-list" id="batch-model-list"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-ghost" id="batch-report-btn" hidden>查看报告</button>
+      <button type="button" class="btn btn-primary" id="start-batch-btn">开始批量</button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
 <script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
@@ -67,6 +107,9 @@
 let adminAuthKey = '';
 let accounts = [];
 let models = [];
+let batchSelection = new Set();
+let batchResults = [];
+let batchRunning = false;
 
 function esc(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -99,6 +142,7 @@ function renderAccounts() {
     : '<option value="">无账号</option>';
   select.disabled = !accounts.length;
   document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
+  document.getElementById('open-batch-btn').disabled = !accounts.length || !models.length;
 }
 
 function renderModels() {
@@ -108,6 +152,157 @@ function renderModels() {
     : '<option value="">无模型</option>';
   select.disabled = !models.length;
   document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
+  document.getElementById('open-batch-btn').disabled = !accounts.length || !models.length;
+  renderBatchModels();
+}
+
+function modelBatchGroup(item) {
+  if (item.kind === 'console' || item.pool === 'basic') return 'free';
+  return 'super';
+}
+
+function batchItemStatus(modelId) {
+  return batchResults.find((item) => item.id === modelId)?.status || 'pending';
+}
+
+function batchStatusLabel(status) {
+  if (status === 'available') return '通过';
+  if (status === 'running') return '检测中';
+  if (status === 'pending') return '待检测';
+  return '未通过';
+}
+
+function batchRowClass(status, selected) {
+  const classes = ['batch-row'];
+  if (selected) classes.push('is-selected');
+  if (status === 'available') classes.push('is-pass');
+  else if (status === 'running') classes.push('is-running');
+  else if (status !== 'pending') classes.push('is-fail');
+  return classes.join(' ');
+}
+
+function batchPillClass(status) {
+  if (status === 'available') return 'batch-pill is-pass';
+  if (status === 'running') return 'batch-pill is-running';
+  if (status === 'pending') return 'batch-pill';
+  return 'batch-pill is-fail';
+}
+
+function updateBatchStatus() {
+  const selectedCount = batchSelection.size;
+  const passCount = batchResults.filter((item) => item.status === 'available').length;
+  const doneCount = batchResults.length;
+  const text = batchRunning
+    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}`
+    : `已选择 ${selectedCount} 个模型，通过 ${passCount}`;
+  document.getElementById('batch-status').textContent = text;
+  document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
+  document.getElementById('batch-report-btn').hidden = !batchResults.length;
+}
+
+function renderBatchModels(runningModelId = '') {
+  const list = document.getElementById('batch-model-list');
+  if (!list) return;
+  list.innerHTML = models.map((item) => {
+    const selected = batchSelection.has(item.id);
+    const status = runningModelId === item.id ? 'running' : batchItemStatus(item.id);
+    return `
+      <label class="${batchRowClass(status, selected)}">
+        <input type="checkbox" value="${esc(item.id)}" ${selected ? 'checked' : ''} ${batchRunning ? 'disabled' : ''}>
+        <span class="batch-name" title="${esc(item.id)}">
+          ${esc(item.name || item.id)}
+          <span class="batch-meta">${esc(item.id)} · ${esc(item.kind || 'chat')} · ${modelBatchGroup(item)}</span>
+        </span>
+        <span class="${batchPillClass(status)}">${esc(batchStatusLabel(status))}</span>
+      </label>`;
+  }).join('') || '<div class="batch-status">无模型</div>';
+  list.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.addEventListener('change', (event) => {
+      const modelId = event.target.value;
+      if (event.target.checked) batchSelection.add(modelId);
+      else batchSelection.delete(modelId);
+      updateBatchStatus();
+      renderBatchModels();
+    });
+  });
+  updateBatchStatus();
+}
+
+function selectBatchGroup(group) {
+  models.forEach((item) => {
+    if (modelBatchGroup(item) === group) batchSelection.add(item.id);
+  });
+  renderBatchModels();
+}
+
+function openBatchModal() {
+  batchResults = [];
+  renderBatchModels();
+  const modal = document.getElementById('batch-modal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeBatchModal() {
+  if (batchRunning) return;
+  const modal = document.getElementById('batch-modal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+async function scanOneModel(tokenId, modelId) {
+  return apiFetch('/grok-capability/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token_id: tokenId, model: modelId }),
+  });
+}
+
+async function runBatchScan() {
+  const tokenId = document.getElementById('token-select').value;
+  const selectedModels = Array.from(batchSelection);
+  if (!tokenId || !selectedModels.length) return;
+
+  batchRunning = true;
+  batchResults = [];
+  updateBatchStatus();
+  window.showToast?.('批量检测已开始', 'success');
+  try {
+    for (const modelId of selectedModels) {
+      renderBatchModels(modelId);
+      try {
+        const report = await scanOneModel(tokenId, modelId);
+        const result = report.results?.[0] || { id: modelId, status: 'unknown' };
+        batchResults.push(result);
+      } catch (error) {
+        const model = models.find((item) => item.id === modelId) || { id: modelId };
+        batchResults.push({
+          id: modelId,
+          name: model.name || modelId,
+          kind: model.kind || 'chat',
+          status: 'unknown',
+          http_status: error.status || 0,
+          message: error.message,
+        });
+      }
+      renderBatchModels();
+    }
+    const token = accounts.find((item) => item.id === tokenId) || null;
+    const available = batchResults.filter((item) => item.status === 'available').length;
+    const report = {
+      object: 'grok_capability_report',
+      started_at: Date.now(),
+      duration_ms: batchResults.reduce((sum, item) => sum + Number(item.duration_ms || 0), 0),
+      token,
+      summary: { total: batchResults.length, available, failed: batchResults.length - available },
+      results: batchResults,
+    };
+    sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
+    window.showToast?.('批量检测完成', 'success');
+  } finally {
+    batchRunning = false;
+    renderBatchModels();
+  }
 }
 
 async function loadOptions() {
@@ -130,11 +325,7 @@ async function runScan() {
   setStatus('检测中…');
   window.showToast?.('检测已开始', 'success');
   try {
-    const report = await apiFetch('/grok-capability/scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_id: tokenId, model: modelId }),
-    });
+    const report = await scanOneModel(tokenId, modelId);
     sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
     location.href = '/admin/grok-capability/report';
   } catch (error) {
@@ -168,6 +359,22 @@ function waitI18n() {
     setStatus(`加载失败：${error.message}`);
     window.showToast?.('加载失败', 'error');
   }));
+  document.getElementById('open-batch-btn').addEventListener('click', openBatchModal);
+  document.getElementById('add-free-btn').addEventListener('click', () => selectBatchGroup('free'));
+  document.getElementById('add-super-btn').addEventListener('click', () => selectBatchGroup('super'));
+  document.getElementById('clear-batch-btn').addEventListener('click', () => {
+    batchSelection.clear();
+    batchResults = [];
+    renderBatchModels();
+  });
+  document.getElementById('start-batch-btn').addEventListener('click', runBatchScan);
+  document.getElementById('batch-report-btn').addEventListener('click', () => {
+    location.href = '/admin/grok-capability/report';
+  });
+  document.querySelectorAll('[data-batch-close]').forEach((node) => node.addEventListener('click', closeBatchModal));
+  document.getElementById('batch-modal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeBatchModal();
+  });
 
   try {
     await loadOptions();
