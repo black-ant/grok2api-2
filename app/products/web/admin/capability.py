@@ -67,9 +67,18 @@ def _mask_token(token: str) -> str:
 
 
 def _account_payload(record: "AccountRecord") -> dict[str, Any]:
+    email = str((record.ext or {}).get("email") or "").strip()
+    token_mask = _mask_token(record.token)
+    label = (
+        f"{email} · {token_mask} · {record.pool or 'basic'} · {record.status}"
+        if email
+        else f"{token_mask} · {record.pool or 'basic'} · {record.status}"
+    )
     return {
         "id": _token_id(record.token),
-        "label": f"{_mask_token(record.token)} · {record.pool or 'basic'} · {record.status}",
+        "label": label,
+        "email": email,
+        "token_mask": token_mask,
         "pool": record.pool or "basic",
         "status": str(record.status),
         "tags": record.tags or [],

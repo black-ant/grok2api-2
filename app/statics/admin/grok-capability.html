@@ -17,8 +17,20 @@
     .field { display:grid; gap:6px }
     .field label { font-size:12px; font-weight:800; color:#222 }
     .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
+    .key-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center }
+    .key-display { min-height:40px; display:grid; align-content:center; gap:3px; padding:8px 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; box-sizing:border-box; min-width:0 }
+    .key-email { font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .key-meta { font-size:11px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
     .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px }
     .cap-actions .btn { min-width:104px }
+    .account-modal { width:min(760px,94vw) }
+    .account-list { max-height:58vh; overflow:auto; display:grid; gap:8px }
+    .account-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff; cursor:pointer }
+    .account-row:hover { border-color:#111 }
+    .account-row.is-active { border-color:#111; box-shadow:inset 0 0 0 1px #111 }
+    .account-email { font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .account-meta { margin-top:4px; font-size:11px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .account-badge { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
     .batch-modal { width:min(760px,94vw) }
     .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
     .batch-head .modal-title { margin-bottom:0 }
@@ -56,10 +68,14 @@
   <section class="cap-card">
     <form class="cap-form" id="cap-form">
       <div class="field">
-        <label for="token-select">Key</label>
-        <select id="token-select" required disabled>
-          <option value="">加载中…</option>
-        </select>
+        <label>Key</label>
+        <div class="key-picker">
+          <div class="key-display" id="key-display">
+            <div class="key-email">加载中…</div>
+            <div class="key-meta">—</div>
+          </div>
+          <button type="button" class="btn btn-ghost" id="open-account-btn" disabled>选择 Key</button>
+        </div>
       </div>
 
       <div class="field">
@@ -77,6 +93,16 @@
     </form>
   </section>
 </main>
+
+<div class="modal-overlay" id="account-modal" aria-hidden="true">
+  <div class="modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+    <div class="batch-head">
+      <div class="modal-title" id="account-modal-title">选择 Key</div>
+      <button type="button" class="btn btn-ghost btn-sm" data-account-close>关闭</button>
+    </div>
+    <div class="account-list" id="account-list"></div>
+  </div>
+</div>
 
 <div class="modal-overlay" id="batch-modal" aria-hidden="true">
   <div class="modal batch-modal" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
@@ -107,6 +133,7 @@
 let adminAuthKey = '';
 let accounts = [];
 let models = [];
+let selectedAccountId = '';
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
@@ -136,13 +163,19 @@ async function apiFetch(path, options = {}) {
 }
 
 function renderAccounts() {
-  const select = document.getElementById('token-select');
-  select.innerHTML = accounts.length
-    ? accounts.map((item) => `<option value="${esc(item.id)}">${esc(item.label)}</option>`).join('')
-    : '<option value="">无账号</option>';
-  select.disabled = !accounts.length;
-  document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
-  document.getElementById('open-batch-btn').disabled = !accounts.length || !models.length;
+  if (!selectedAccountId && accounts.length) selectedAccountId = accounts[0].id;
+  if (selectedAccountId && !accounts.some((item) => item.id === selectedAccountId)) {
+    selectedAccountId = accounts[0]?.id || '';
+  }
+  const account = accounts.find((item) => item.id === selectedAccountId);
+  const display = document.getElementById('key-display');
+  display.innerHTML = account
+    ? `<div class="key-email">${esc(account.email || '未记录邮箱')}</div><div class="key-meta">${esc(account.token_mask || account.id)} · ${esc(account.pool || 'basic')} · ${esc(account.status || '')}</div>`
+    : '<div class="key-email">无账号</div><div class="key-meta">—</div>';
+  document.getElementById('open-account-btn').disabled = !accounts.length;
+  document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
+  document.getElementById('open-batch-btn').disabled = !selectedAccountId || !models.length;
+  renderAccountList();
 }
 
 function renderModels() {
@@ -151,9 +184,43 @@ function renderModels() {
     ? models.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.kind || 'chat')}</option>`).join('')
     : '<option value="">无模型</option>';
   select.disabled = !models.length;
-  document.getElementById('scan-btn').disabled = !accounts.length || !models.length;
-  document.getElementById('open-batch-btn').disabled = !accounts.length || !models.length;
+  document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
+  document.getElementById('open-batch-btn').disabled = !selectedAccountId || !models.length;
   renderBatchModels();
+}
+
+function renderAccountList() {
+  const list = document.getElementById('account-list');
+  if (!list) return;
+  list.innerHTML = accounts.map((item) => `
+    <button type="button" class="account-row ${item.id === selectedAccountId ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
+      <span>
+        <span class="account-email">${esc(item.email || '未记录邮箱')}</span>
+        <span class="account-meta">${esc(item.token_mask || item.id)} · ${esc(item.pool || 'basic')} · ${esc(item.status || '')}</span>
+      </span>
+      <span class="account-badge">${esc(item.pool || 'basic')}</span>
+    </button>
+  `).join('') || '<div class="batch-status">无账号</div>';
+  list.querySelectorAll('[data-account-id]').forEach((node) => {
+    node.addEventListener('click', () => {
+      selectedAccountId = node.dataset.accountId || '';
+      renderAccounts();
+      closeAccountModal();
+    });
+  });
+}
+
+function openAccountModal() {
+  renderAccountList();
+  const modal = document.getElementById('account-modal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeAccountModal() {
+  const modal = document.getElementById('account-modal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
 }
 
 function modelBatchGroup(item) {
@@ -259,7 +326,7 @@ async function scanOneModel(tokenId, modelId) {
 }
 
 async function runBatchScan() {
-  const tokenId = document.getElementById('token-select').value;
+  const tokenId = selectedAccountId;
   const selectedModels = Array.from(batchSelection);
   if (!tokenId || !selectedModels.length) return;
 
@@ -316,7 +383,7 @@ async function loadOptions() {
 }
 
 async function runScan() {
-  const tokenId = document.getElementById('token-select').value;
+  const tokenId = selectedAccountId;
   const modelId = document.getElementById('model-select').value;
   if (!tokenId || !modelId) return;
 
@@ -332,7 +399,7 @@ async function runScan() {
     setStatus(`检测失败：${error.message}`);
     window.showToast?.('检测失败', 'error');
   } finally {
-    button.disabled = !accounts.length || !models.length;
+    button.disabled = !selectedAccountId || !models.length;
   }
 }
 
@@ -359,6 +426,11 @@ function waitI18n() {
     setStatus(`加载失败：${error.message}`);
     window.showToast?.('加载失败', 'error');
   }));
+  document.getElementById('open-account-btn').addEventListener('click', openAccountModal);
+  document.querySelectorAll('[data-account-close]').forEach((node) => node.addEventListener('click', closeAccountModal));
+  document.getElementById('account-modal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeAccountModal();
+  });
   document.getElementById('open-batch-btn').addEventListener('click', openBatchModal);
   document.getElementById('add-free-btn').addEventListener('click', () => selectBatchGroup('free'));
   document.getElementById('add-super-btn').addEventListener('click', () => selectBatchGroup('super'));
