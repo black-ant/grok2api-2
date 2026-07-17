@@ -13,10 +13,11 @@
     .page-title { font-size:22px; font-weight:700; line-height:1.2 }
     .report-status { font-size:12px; color:#777 }
     .report-card { background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.04); margin-bottom:14px }
-    .summary-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px }
+    .summary-row { display:grid; grid-template-columns:1.2fr 2fr .8fr .8fr; gap:10px }
     .summary-item { border:1px solid #ebe5dc; border-radius:12px; padding:12px; background:#fff }
     .summary-label { font-size:11px; color:#666; margin-bottom:6px }
     .summary-value { font-size:20px; font-weight:800; color:#111; line-height:1.1 }
+    .summary-question { font-size:13px; font-weight:600; line-height:1.35 }
     .report-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px }
     .report-actions { display:flex; align-items:center; gap:8px }
     .table-card { border-radius:14px }
@@ -64,16 +65,16 @@
           <div class="summary-value mono" id="summary-token">—</div>
         </div>
         <div class="summary-item">
-          <div class="summary-label">模型总数</div>
-          <div class="summary-value" id="summary-total">0</div>
+          <div class="summary-label">问题</div>
+          <div class="summary-value summary-question" id="summary-question">—</div>
         </div>
         <div class="summary-item">
-          <div class="summary-label">可用</div>
-          <div class="summary-value" id="summary-available">0</div>
+          <div class="summary-label">状态</div>
+          <div class="summary-value" id="summary-status">—</div>
         </div>
         <div class="summary-item">
-          <div class="summary-label">失败</div>
-          <div class="summary-value" id="summary-failed">0</div>
+          <div class="summary-label">耗时</div>
+          <div class="summary-value" id="summary-duration">0 ms</div>
         </div>
       </div>
     </section>
@@ -156,13 +157,13 @@ function renderReport() {
     return;
   }
 
-  const summary = report.summary || {};
+  const firstResult = report.results[0] || {};
   document.getElementById('empty-card').hidden = true;
   document.getElementById('report-view').hidden = false;
   document.getElementById('summary-token').textContent = report.token?.label || '—';
-  document.getElementById('summary-total').textContent = summary.total ?? report.results.length;
-  document.getElementById('summary-available').textContent = summary.available ?? 0;
-  document.getElementById('summary-failed').textContent = summary.failed ?? 0;
+  document.getElementById('summary-question').textContent = report.question || firstResult.question || '—';
+  document.getElementById('summary-status').textContent = statusLabel(firstResult.status);
+  document.getElementById('summary-duration').textContent = `${report.duration_ms || 0} ms`;
   document.getElementById('report-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
   document.getElementById('result-body').innerHTML = report.results.map((item) => `
     <tr>

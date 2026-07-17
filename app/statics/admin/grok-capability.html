@@ -133,7 +133,7 @@ async function runScan() {
     const report = await apiFetch('/grok-capability/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_id: tokenId, models: [modelId] }),
+      body: JSON.stringify({ token_id: tokenId, model: modelId }),
     });
     sessionStorage.setItem('grok_capability_report', JSON.stringify(report));
     location.href = '/admin/grok-capability/report';

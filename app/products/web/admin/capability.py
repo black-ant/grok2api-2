@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from hashlib import sha256
+from random import choice
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -36,13 +37,23 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/grok-capability", tags=["Admin - Grok Capability"])
 
 _PAGE_SIZE = 2000
-_MAX_MODELS_PER_SCAN = 40
-_SCAN_MESSAGE = "Reply exactly: OK"
+_SCAN_QUESTIONS: tuple[str, ...] = (
+    "请用一句话说明雨后为什么会出现彩虹。",
+    "请用一句话回答：2 加 3 等于几？",
+    "请用一句话说明水为什么会结冰。",
+    "请用一句话解释什么是 API。",
+    "请用一句话说出太阳从哪个方向升起。",
+    "请用一句话说明猫为什么会打呼噜。",
+    "请用一句话解释什么是开源软件。",
+    "请用一句话回答：一年通常有多少个月？",
+    "请用一句话说明为什么要备份数据。",
+    "请用一句话解释什么是模型推理。",
+)
 
 
 class CapabilityScanRequest(BaseModel):
     token_id: str = Field(min_length=16)
-    models: list[str] = Field(default_factory=list)
+    model: str = Field(min_length=1)
 
 
 def _token_id(token: str) -> str:
@@ -163,11 +174,20 @@ def _error_payload(exc: BaseException) -> dict[str, Any]:
     }
 
 
-async def _probe_console_model(token: str, model_id: str, timeout_s: float) -> str:
+def _scan_question() -> str:
+    return choice(_SCAN_QUESTIONS)
+
+
+async def _probe_console_model(
+    token: str,
+    model_id: str,
+    timeout_s: float,
+    question: str,
+) -> str:
     adapter = ConsoleStreamAdapter()
     parts: list[str] = []
     payload = build_console_payload(
-        messages=[{"role": "user", "content": _SCAN_MESSAGE}],
+        messages=[{"role": "user", "content": question}],
         model=model_id,
         temperature=0.0,
         top_p=1.0,
@@ -180,7 +200,12 @@ async def _probe_console_model(token: str, model_id: str, timeout_s: float) -> s
     return "".join(parts)
 
 
-async def _probe_chat_model(token: str, spec: "ModelSpec", timeout_s: float) -> str:
+async def _probe_chat_model(
+    token: str,
+    spec: "ModelSpec",
+    timeout_s: float,
+    question: str,
+) -> str:
     adapter = StreamAdapter()
     parts: list[str] = []
     try:
@@ -191,7 +216,7 @@ async def _probe_chat_model(token: str, spec: "ModelSpec", timeout_s: float) -> 
     async for line in _stream_chat(
         token=token,
         mode_id=mode_id,
-        message=_SCAN_MESSAGE,
+        message=question,
         files=[],
         timeout_s=timeout_s,
     ):
@@ -234,61 +259,49 @@ async def scan_capabilities(
         raise ValidationError("Grok token not found", param="token_id")
 
     model_by_id = {spec.model_name: spec for spec in _scan_models()}
-    requested_models: list[str] = []
-    for raw_model in req.models or list(model_by_id):
-        model_id = str(raw_model or "").strip()
-        if model_id and model_id not in requested_models:
-            requested_models.append(model_id)
-
-    if not requested_models:
-        raise ValidationError("models cannot be empty", param="models")
-    if len(requested_models) > _MAX_MODELS_PER_SCAN:
+    model_id = req.model.strip()
+    spec = model_by_id.get(model_id)
+    if spec is None:
         raise ValidationError(
-            f"models cannot exceed {_MAX_MODELS_PER_SCAN}",
-            param="models",
-        )
-
-    invalid = [model_id for model_id in requested_models if model_id not in model_by_id]
-    if invalid:
-        raise ValidationError(
-            f"Unsupported scan model: {invalid[0]}",
-            param="models",
+            f"Unsupported scan model: {model_id}",
+            param="model",
         )
 
     timeout_s = get_config().get_float("chat.timeout", 120.0)
+    question = _scan_question()
     started_at = int(time.time() * 1000)
     started = time.perf_counter()
     results: list[dict[str, Any]] = []
 
-    for model_id in requested_models:
-        spec = model_by_id[model_id]
-        item_started = time.perf_counter()
-        base = _model_payload(spec)
-        try:
-            if spec.is_console_chat():
-                text = await _probe_console_model(account.token, model_id, timeout_s)
-            else:
-                text = await _probe_chat_model(account.token, spec, timeout_s)
-            results.append(
-                {
-                    **base,
-                    "status": "available",
-                    "http_status": 200,
-                    "duration_ms": round((time.perf_counter() - item_started) * 1000, 2),
-                    "message": "OK",
-                    "response_preview": _preview_text(text),
-                }
-            )
-        except Exception as exc:
-            error = _error_payload(exc)
-            results.append(
-                {
-                    **base,
-                    **error,
-                    "duration_ms": round((time.perf_counter() - item_started) * 1000, 2),
-                    "response_preview": "",
-                }
-            )
+    item_started = time.perf_counter()
+    base = _model_payload(spec)
+    try:
+        if spec.is_console_chat():
+            text = await _probe_console_model(account.token, model_id, timeout_s, question)
+        else:
+            text = await _probe_chat_model(account.token, spec, timeout_s, question)
+        results.append(
+            {
+                **base,
+                "status": "available",
+                "http_status": 200,
+                "duration_ms": round((time.perf_counter() - item_started) * 1000, 2),
+                "message": "OK",
+                "question": question,
+                "response_preview": _preview_text(text),
+            }
+        )
+    except Exception as exc:
+        error = _error_payload(exc)
+        results.append(
+            {
+                **base,
+                **error,
+                "duration_ms": round((time.perf_counter() - item_started) * 1000, 2),
+                "question": question,
+                "response_preview": "",
+            }
+        )
 
     available = sum(1 for item in results if item.get("status") == "available")
     report = {
@@ -296,6 +309,7 @@ async def scan_capabilities(
         "started_at": started_at,
         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
         "token": _account_payload(account),
+        "question": question,
         "summary": {
             "total": len(results),
             "available": available,
@@ -304,9 +318,9 @@ async def scan_capabilities(
         "results": results,
     }
     logger.info(
-        "admin grok capability scan completed: token={} models={} available={} duration_ms={}",
+        "admin grok capability scan completed: token={} model={} available={} duration_ms={}",
         _mask_token(account.token),
-        len(results),
+        model_id,
         available,
         report["duration_ms"],
     )
