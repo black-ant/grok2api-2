@@ -9,19 +9,19 @@
   <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
   <style>
     body { background:#FAF9F5 }
-    .page-hd { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+    .page-hd { display:flex; align-items:center; gap:12px; margin-bottom:16px }
     .page-title { font-size:22px; font-weight:700; line-height:1.2 }
-    .cap-status { font-size:12px; color:#777 }
+    .cap-status { margin-left:auto; font-size:12px; color:#777; white-space:nowrap }
     .cap-card { width:100%; max-width:none; box-sizing:border-box; background:#fff; border:1px solid #e8e3d8; border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,23,42,.04) }
-    .cap-form { display:grid; gap:14px }
-    .field { display:grid; gap:6px }
+    .cap-form { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,.62fr); align-items:end; gap:14px 16px }
+    .field { display:grid; gap:6px; min-width:0 }
     .field label { font-size:12px; font-weight:800; color:#222 }
     .field select { width:100%; height:40px; padding:0 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; box-sizing:border-box }
     .key-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center }
     .key-display { min-height:40px; display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; box-sizing:border-box; min-width:0; overflow:hidden }
     .key-email { min-width:0; font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .key-meta { flex:0 0 auto; font-size:11px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
-    .cap-actions { display:flex; align-items:center; gap:8px; padding-top:2px }
+    .cap-actions { grid-column:1 / -1; display:flex; align-items:center; gap:8px; padding-top:2px }
     .cap-actions .btn { min-width:104px }
     .account-modal { width:min(760px,94vw) }
     .account-list { max-height:58vh; overflow:auto; display:grid; gap:8px }
@@ -60,6 +60,9 @@
     .result-actions { display:flex; justify-content:flex-end; gap:6px; white-space:nowrap }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
+      .cap-form { grid-template-columns:1fr }
+      .cap-actions { flex-wrap:wrap }
+      .cap-status { width:100%; margin-left:0 }
       .batch-row { grid-template-columns:auto minmax(0,1fr); align-items:start }
       .batch-pill { grid-column:2 }
       .batch-result-table { display:block; overflow-x:auto }
@@ -73,7 +76,6 @@
 <main class="admin-main" style="padding-bottom:60px">
   <div class="page-hd">
     <div class="page-title">Grok 能力检测</div>
-    <div class="cap-status" id="cap-status">加载中…</div>
   </div>
 
   <section class="cap-card">
@@ -100,6 +102,7 @@
         <button type="submit" class="btn btn-primary" id="scan-btn" disabled>开始检测</button>
         <button type="button" class="btn btn-ghost" id="open-batch-btn" disabled>批量检测</button>
         <button type="button" class="btn btn-ghost" id="reload-btn">重新加载</button>
+        <span class="cap-status" id="cap-status">加载中…</span>
       </div>
     </form>
   </section>
@@ -194,8 +197,12 @@ function renderAccounts() {
   }
   const account = accounts.find((item) => item.id === selectedAccountId);
   const display = document.getElementById('key-display');
+  const primary = account?.email || account?.token_mask || account?.id || '';
+  const meta = account
+    ? [account.email ? account.token_mask || account.id : '', account.pool || 'basic', account.status || ''].filter(Boolean).join(' · ')
+    : '';
   display.innerHTML = account
-    ? `<div class="key-email">${esc(account.email || '未记录邮箱')}</div><div class="key-meta">${esc(account.token_mask || account.id)} · ${esc(account.pool || 'basic')} · ${esc(account.status || '')}</div>`
+    ? `<div class="key-email">${esc(primary)}</div><div class="key-meta">${esc(meta)}</div>`
     : '<div class="key-email">无账号</div><div class="key-meta">—</div>';
   document.getElementById('open-account-btn').disabled = !accounts.length;
   document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
@@ -206,7 +213,7 @@ function renderAccounts() {
 function renderModels() {
   const select = document.getElementById('model-select');
   select.innerHTML = models.length
-    ? models.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.kind || 'chat')}</option>`).join('')
+    ? models.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.id)} · ${esc(item.kind || 'chat')}</option>`).join('')
     : '<option value="">无模型</option>';
   select.disabled = !models.length;
   document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
@@ -220,8 +227,8 @@ function renderAccountList() {
   list.innerHTML = accounts.map((item) => `
     <button type="button" class="account-row ${item.id === selectedAccountId ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
       <span>
-        <span class="account-email">${esc(item.email || '未记录邮箱')}</span>
-        <span class="account-meta">${esc(item.token_mask || item.id)} · ${esc(item.pool || 'basic')} · ${esc(item.status || '')}</span>
+        <span class="account-email">${esc(item.email || item.token_mask || item.id)}</span>
+        <span class="account-meta">${esc([item.email ? item.token_mask || item.id : '', item.pool || 'basic', item.status || ''].filter(Boolean).join(' · '))}</span>
       </span>
       <span class="account-badge">${esc(item.pool || 'basic')}</span>
     </button>
