@@ -122,6 +122,8 @@
       <button type="button" class="btn btn-ghost btn-sm" data-batch-close>关闭</button>
     </div>
     <div class="batch-picks">
+      <button type="button" class="btn btn-ghost btn-sm" id="select-all-batch-btn">全选</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="invert-batch-btn">全部反选</button>
       <button type="button" class="btn btn-ghost btn-sm" id="clear-batch-btn">清空</button>
     </div>
     <div class="batch-status" id="batch-status">选择模型后开始。</div>
@@ -282,6 +284,9 @@ function updateBatchStatus() {
     : `已选择 ${selectedCount} 个模型，通过 ${passCount}`;
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
+  document.getElementById('select-all-batch-btn').disabled = batchRunning || !models.length;
+  document.getElementById('invert-batch-btn').disabled = batchRunning || !models.length;
+  document.getElementById('clear-batch-btn').disabled = batchRunning || !selectedCount;
   document.getElementById('batch-report-btn').hidden = !batchResults.length;
   renderBatchResults();
 }
@@ -551,6 +556,19 @@ function waitI18n() {
     if (event.target === event.currentTarget) closeAccountModal();
   });
   document.getElementById('open-batch-btn').addEventListener('click', openBatchModal);
+  document.getElementById('select-all-batch-btn').addEventListener('click', () => {
+    models.forEach((item) => batchSelection.add(item.id));
+    batchResults = [];
+    renderBatchModels();
+  });
+  document.getElementById('invert-batch-btn').addEventListener('click', () => {
+    models.forEach((item) => {
+      if (batchSelection.has(item.id)) batchSelection.delete(item.id);
+      else batchSelection.add(item.id);
+    });
+    batchResults = [];
+    renderBatchModels();
+  });
   document.getElementById('clear-batch-btn').addEventListener('click', () => {
     batchSelection.clear();
     batchResults = [];
