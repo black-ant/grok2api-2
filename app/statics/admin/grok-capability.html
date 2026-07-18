@@ -41,13 +41,26 @@
     .scan-result-text { font-size:13px; color:#222; white-space:pre-wrap; overflow-wrap:anywhere }
     .scan-result-text.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px }
     .account-modal { width:min(760px,94vw) }
-    .account-list { max-height:58vh; overflow:auto; display:grid; gap:8px }
-    .account-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff; cursor:pointer }
-    .account-row:hover { border-color:#111 }
-    .account-row.is-active { border-color:#111; box-shadow:inset 0 0 0 1px #111 }
+    .account-filters { display:grid; grid-template-columns:minmax(0,1fr) 150px; gap:8px; margin-bottom:10px }
+    .account-filters .input,
+    .account-filters select { width:100%; height:36px; border:1px solid #d8d2c7; border-radius:10px; background:#fff; color:#111; font:inherit; font-size:12px; box-sizing:border-box }
+    .account-filters .input { padding:0 10px }
+    .account-filters select { padding:0 8px }
+    .account-table { max-height:58vh; overflow:auto; border:1px solid #e6dfd4; border-radius:12px; background:#fff }
+    .account-table-head,
+    .account-row { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(150px,.7fr); gap:12px; align-items:center }
+    .account-table-head { position:sticky; top:0; z-index:1; padding:9px 12px; border-bottom:1px solid #eee8df; background:#fbfaf7; color:#777; font-size:11px; font-weight:800 }
+    .account-list { display:grid }
+    .account-row { width:100%; padding:10px 12px; border:0; border-bottom:1px solid #f0ebe4; background:#fff; cursor:pointer; text-align:left }
+    .account-row:last-child { border-bottom:0 }
+    .account-row:hover { background:#fffdf8 }
+    .account-row.is-active { background:#faf7ef; box-shadow:inset 3px 0 0 #111 }
+    .account-main,
+    .account-side { min-width:0; display:grid; gap:4px }
     .account-email { font-size:13px; font-weight:800; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-    .account-meta { margin-top:4px; font-size:11px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-    .account-badge { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
+    .account-meta { font-size:11px; color:#666; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .account-badge { justify-self:start; display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
+    .account-status { font-size:11px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     #batch-modal { padding:16px; overflow-y:auto }
     .batch-modal { width:min(880px,94vw); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; overflow:hidden }
     .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
@@ -172,7 +185,17 @@
       <div class="modal-title" id="account-modal-title">选择 Key</div>
       <button type="button" class="btn btn-ghost btn-sm" data-account-close>关闭</button>
     </div>
-    <div class="account-list" id="account-list"></div>
+    <div class="account-filters">
+      <input id="account-email-filter" class="input" type="search" placeholder="筛选邮箱">
+      <select id="account-pool-filter" aria-label="筛选类型"></select>
+    </div>
+    <div class="account-table">
+      <div class="account-table-head">
+        <span>邮箱 / Key</span>
+        <span>类型 / 状态</span>
+      </div>
+      <div class="account-list" id="account-list"></div>
+    </div>
   </div>
 </div>
 
@@ -210,6 +233,8 @@ let selectedAccountId = '';
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
+let accountEmailFilter = '';
+let accountPoolFilter = '';
 const VIRTUAL_MODEL_ALIASES = ['FREE', 'SUPER'];
 let aliasCache = { FREE: [], SUPER: [] };
 let aliasCacheLoaded = false;
@@ -231,6 +256,31 @@ function accountMetaLabel(account) {
   return [account.email ? account.token_mask || account.id : '', account.pool || 'basic', account.status || '']
     .filter(Boolean)
     .join(' · ');
+}
+
+function accountTokenLabel(account) {
+  return account?.token_mask || account?.id || '—';
+}
+
+function filteredAccounts() {
+  const emailFilter = accountEmailFilter.trim().toLowerCase();
+  const poolFilter = accountPoolFilter.trim().toLowerCase();
+  return accounts.filter((item) => {
+    const email = String(item.email || '').toLowerCase();
+    const primary = String(accountPrimaryLabel(item)).toLowerCase();
+    const pool = String(item.pool || 'basic').toLowerCase();
+    return (!emailFilter || email.includes(emailFilter) || primary.includes(emailFilter))
+      && (!poolFilter || pool === poolFilter);
+  });
+}
+
+function renderAccountPoolFilter() {
+  const select = document.getElementById('account-pool-filter');
+  if (!select) return;
+  const pools = [...new Set(accounts.map((item) => String(item.pool || 'basic').trim()).filter(Boolean))].sort();
+  if (accountPoolFilter && !pools.includes(accountPoolFilter)) accountPoolFilter = '';
+  select.innerHTML = '<option value="">全部类型</option>'
+    + pools.map((pool) => `<option value="${esc(pool)}" ${pool === accountPoolFilter ? 'selected' : ''}>${esc(pool)}</option>`).join('');
 }
 
 function fmtTime(value) {
@@ -345,15 +395,19 @@ function renderModels() {
 function renderAccountList() {
   const list = document.getElementById('account-list');
   if (!list) return;
-  list.innerHTML = accounts.map((item) => `
+  const items = filteredAccounts();
+  list.innerHTML = items.map((item) => `
     <button type="button" class="account-row ${item.id === selectedAccountId ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
-      <span>
+      <span class="account-main">
         <span class="account-email">${esc(item.email || item.token_mask || item.id)}</span>
-        <span class="account-meta">${esc(accountMetaLabel(item))}</span>
+        <span class="account-meta">${esc(accountTokenLabel(item))}</span>
       </span>
-      <span class="account-badge">${esc(item.pool || 'basic')}</span>
+      <span class="account-side">
+        <span class="account-badge">${esc(item.pool || 'basic')}</span>
+        <span class="account-status">${esc(item.status || '—')}</span>
+      </span>
     </button>
-  `).join('') || '<div class="batch-status">无账号</div>';
+  `).join('') || '<div class="batch-status" style="padding:12px;margin:0">无匹配账号</div>';
   list.querySelectorAll('[data-account-id]').forEach((node) => {
     node.addEventListener('click', () => {
       selectedAccountId = node.dataset.accountId || '';
@@ -364,10 +418,12 @@ function renderAccountList() {
 }
 
 function openAccountModal() {
+  renderAccountPoolFilter();
   renderAccountList();
   const modal = document.getElementById('account-modal');
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => document.getElementById('account-email-filter')?.focus(), 0);
 }
 
 function closeAccountModal() {
@@ -682,6 +738,14 @@ function waitI18n() {
     window.showToast?.('加载失败', 'error');
   }));
   document.getElementById('open-account-btn').addEventListener('click', openAccountModal);
+  document.getElementById('account-email-filter').addEventListener('input', (event) => {
+    accountEmailFilter = event.target.value || '';
+    renderAccountList();
+  });
+  document.getElementById('account-pool-filter').addEventListener('change', (event) => {
+    accountPoolFilter = event.target.value || '';
+    renderAccountList();
+  });
   document.querySelectorAll('[data-account-close]').forEach((node) => node.addEventListener('click', closeAccountModal));
   document.getElementById('account-modal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeAccountModal();
