@@ -235,20 +235,46 @@
       flex-wrap:wrap;
     }
     .toolbar-email-search {
-      width:180px !important;
-      height:28px;
+      width:200px !important;
+      height:30px;
       border-radius:999px;
       font:inherit;
-      color:#555;
-      background:#fafafa;
-      border-color:transparent;
-      padding:0 12px;
-    }
-    .toolbar-email-search::placeholder { color:#b0b0b0; }
-    .toolbar-email-search:focus {
-      border-color:#ded8cf;
+      color:#333;
       background:#fff;
-      box-shadow:none;
+      border:1px solid #e0d9cf;
+      padding:0 12px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
+    }
+    .toolbar-email-search::placeholder { color:#9a948a; }
+    .toolbar-email-search:hover {
+      border-color:#d2c9bb;
+      background:#fff;
+    }
+    .toolbar-email-search:focus {
+      border-color:#c4b8a5;
+      background:#fff;
+      box-shadow:0 0 0 3px rgba(196,184,165,.22);
+      outline:none;
+    }
+    .toolbar-status-filter {
+      width:104px !important;
+      height:30px;
+      border-radius:999px;
+      font:inherit;
+      color:#444;
+      background:#fff;
+      border:1px solid #e0d9cf;
+      padding:0 10px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
+      cursor:pointer;
+    }
+    .toolbar-status-filter:hover {
+      border-color:#d2c9bb;
+    }
+    .toolbar-status-filter:focus {
+      border-color:#c4b8a5;
+      box-shadow:0 0 0 3px rgba(196,184,165,.22);
+      outline:none;
     }
     .toolbar-icon-btn {
       width:28px;
@@ -662,6 +688,61 @@
       margin-bottom:12px;
     }
     #modal-export .dialog-body { gap:10px }
+    .export-scope {
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+      margin-bottom:2px;
+    }
+    .export-scope-btn {
+      min-height:34px;
+      height:auto;
+      padding:7px 10px;
+      border-radius:10px;
+      border:1px solid #e4ddd2;
+      background:#faf9f5;
+      color:#555;
+      font:inherit;
+      font-size:12px;
+      font-weight:600;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      cursor:pointer;
+      transition:background .12s, border-color .12s, color .12s;
+    }
+    .export-scope-btn:hover:not(:disabled) {
+      background:#f4f0e8;
+      border-color:#d8d0c3;
+      color:#333;
+    }
+    .export-scope-btn.active {
+      background:#111;
+      border-color:#111;
+      color:#fff;
+    }
+    .export-scope-btn:disabled {
+      opacity:.45;
+      cursor:not-allowed;
+    }
+    .export-scope-count {
+      min-width:18px;
+      height:18px;
+      padding:0 5px;
+      border-radius:999px;
+      background:rgba(0,0,0,.06);
+      font-size:11px;
+      font-weight:700;
+      font-variant-numeric:tabular-nums;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .export-scope-btn.active .export-scope-count {
+      background:rgba(255,255,255,.16);
+      color:#fff;
+    }
     .export-option-btn {
       width:100%;
       min-height:34px;
@@ -915,6 +996,13 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
       <input id="email-search" class="input toolbar-email-search" type="search" autocomplete="off" oninput="setEmailQuery(this.value)" placeholder="邮箱" data-i18n-placeholder="account.emailSearchPlaceholder">
+      <select id="status-filter" class="input toolbar-status-filter" aria-label="状态" data-i18n-aria-label="account.filterStatusLabel" onchange="switchStatus(this.value)">
+        <option value="all" data-i18n="account.filterStatusAll">全部</option>
+        <option value="active" data-i18n="account.filterStatusActive">正常</option>
+        <option value="cooling" data-i18n="account.filterStatusCooling">限流</option>
+        <option value="invalid" data-i18n="account.filterStatusInvalid">异常</option>
+        <option value="disabled" data-i18n="account.filterStatusDisabled">禁用</option>
+      </select>
     </div>
     <div class="table-toolbar-actions">
       <div class="toolbar-dropdown" id="filter-menu">
@@ -1144,7 +1232,17 @@
 <!-- ── Export Modal ────────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-export">
   <div class="modal" style="max-width:360px">
-    <div class="modal-title" data-i18n="account.exportTitle">导出格式</div>
+    <div class="modal-title" data-i18n="account.exportTitle">导出账户</div>
+    <div class="export-scope" role="group" aria-label="导出范围">
+      <button type="button" id="exp-scope-all" class="export-scope-btn active" onclick="setExportScope('all')">
+        <span data-i18n="account.exportAll">导出全部</span>
+        <span class="export-scope-count" id="exp-all-count">0</span>
+      </button>
+      <button type="button" id="exp-scope-selected" class="export-scope-btn" onclick="setExportScope('selected')">
+        <span data-i18n="account.exportSelected">导出勾选</span>
+        <span class="export-scope-count" id="exp-selected-count">0</span>
+      </button>
+    </div>
     <div class="dialog-help"><span data-i18n="account.exportCountPrefix">共 </span><b id="exp-count">0</b><span data-i18n="account.exportCountSuffix"> 个 Token</span></div>
     <div class="dialog-body" style="gap:8px">
       <button id="exp-json-btn" class="dialog-btn dialog-btn-primary export-option-btn" data-i18n="account.exportJson">JSON格式（完整导出）</button>
@@ -1480,6 +1578,8 @@ function renderStatusFilters(view = getTokenView()) {
   setFilterCount('fc-status-invalid', view.statusCounts.invalid);
   setFilterCount('fc-status-disabled', view.statusCounts.disabled);
   document.querySelectorAll('[data-status]').forEach(el => el.classList.toggle('active', el.dataset.status === curStatus));
+  const statusSelect = document.getElementById('status-filter');
+  if (statusSelect && statusSelect.value !== curStatus) statusSelect.value = curStatus || 'all';
 }
 
 function renderNsfwFilters(view = getTokenView()) {
@@ -1980,21 +2080,75 @@ async function saveTokens(pool, newToks, autoNsfw, modalId, pendingMessage, succ
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────
+let exportScope = 'all';
+
+function exportCandidates(scope = exportScope) {
+  const all = filtered();
+  if (scope === 'selected') return all.filter(t => sel.has(t.token));
+  return all;
+}
+
+function setExportScope(scope) {
+  const next = scope === 'selected' ? 'selected' : 'all';
+  if (next === 'selected' && !exportCandidates('selected').length) {
+    showToast(tr('account.exportSelectedEmpty', null, '请先勾选要导出的账户'), 'error');
+    return;
+  }
+  exportScope = next;
+  syncExportModal();
+}
+
+function syncExportModal() {
+  const allTokensToExport = filtered();
+  const selectedTokens = exportCandidates('selected');
+  if (exportScope === 'selected' && !selectedTokens.length) exportScope = 'all';
+
+  const allBtn = document.getElementById('exp-scope-all');
+  const selectedBtn = document.getElementById('exp-scope-selected');
+  if (allBtn) allBtn.classList.toggle('active', exportScope === 'all');
+  if (selectedBtn) {
+    selectedBtn.classList.toggle('active', exportScope === 'selected');
+    selectedBtn.disabled = !selectedTokens.length;
+  }
+
+  const allCount = document.getElementById('exp-all-count');
+  const selectedCount = document.getElementById('exp-selected-count');
+  const expCount = document.getElementById('exp-count');
+  if (allCount) allCount.textContent = allTokensToExport.length;
+  if (selectedCount) selectedCount.textContent = selectedTokens.length;
+  if (expCount) expCount.textContent = exportCandidates().length;
+}
+
 function doExport() {
-  const tokens = filtered();
-  if (!tokens.length) return showToast(tr('account.exportEmpty', null, '当前没有可导出的 Token'), 'error');
+  const allTokensToExport = filtered();
+  if (!allTokensToExport.length) return showToast(tr('account.exportEmpty', null, '当前没有可导出的 Token'), 'error');
+  exportScope = exportCandidates('selected').length ? 'selected' : 'all';
   openModal('modal-export');
-  document.getElementById('exp-count').textContent = tokens.length;
-  document.getElementById('exp-json-btn').onclick = () => {
-    closeModal('modal-export');
+  syncExportModal();
+  document.getElementById('exp-json-btn').onclick = () => runExport('json');
+  document.getElementById('exp-txt-btn').onclick = () => runExport('txt');
+}
+
+function runExport(format) {
+  const tokens = exportCandidates();
+  if (!tokens.length) {
+    showToast(
+      exportScope === 'selected'
+        ? tr('account.exportSelectedEmpty', null, '请先勾选要导出的账户')
+        : tr('account.exportEmpty', null, '当前没有可导出的 Token'),
+      'error'
+    );
+    return;
+  }
+  closeModal('modal-export');
+  const suffix = currentFilterSuffix() + (exportScope === 'selected' ? '-selected' : '');
+  if (format === 'json') {
     const out = {};
     tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,email:t.email||'',tags:t.tags||[]}));
-    _download(JSON.stringify(out,null,2), `tokens-${currentFilterSuffix()}.json`, 'application/json');
-  };
-  document.getElementById('exp-txt-btn').onclick = () => {
-    closeModal('modal-export');
-    _download(tokens.map(t => t.email ? `${t.token} | ${t.email}` : t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
-  };
+    _download(JSON.stringify(out,null,2), `tokens-${suffix}.json`, 'application/json');
+    return;
+  }
+  _download(tokens.map(t => t.email ? `${t.token} | ${t.email}` : t.token).join('\n'), `tokens-${suffix}.txt`, 'text/plain');
 }
 
 function currentFilterSuffix() {
