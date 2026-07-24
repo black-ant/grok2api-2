@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.platform.errors import UpstreamError
 from app.products.anthropic.router import MessagesRequest, messages_endpoint
 from app.products.openai.router import ChatCompletionRequest, list_models, chat_completions_endpoint
 
@@ -69,6 +70,39 @@ class VirtualModelHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.body.decode("utf-8").find("grok-4.3-console") >= 0, True)
         self.assertEqual(captured["model"], "grok-4.3-console")
         self.assertEqual(request.state.request_log_routing["resolved_model"], "grok-4.3-console")
+
+    async def test_streaming_upstream_429_returns_http_429_before_sse(self):
+        request = _Request(app=SimpleNamespace(state=SimpleNamespace(repository=None)), state=_RequestState())
+
+        async def fake_available_pools(_request):
+            return frozenset({"basic"})
+
+        async def failing_stream():
+            raise UpstreamError("Console API returned 429", status=429)
+            yield "data: unreachable\n\n"
+
+        async def fake_chat_completions(**_kwargs):
+            return failing_stream()
+
+        with patch("app.control.model.aliases.get_config", return_value={
+            "FREE": ["grok-4.3-console"],
+        }), patch("app.platform.config.snapshot.get_config", return_value=_DummyConfig()), patch(
+            "app.products.openai.router._available_pools", new=fake_available_pools
+        ), patch(
+            "app.products.openai.router.chat_completions",
+            new=AsyncMock(side_effect=fake_chat_completions),
+        ):
+            response = await chat_completions_endpoint(
+                ChatCompletionRequest(
+                    model="FREE",
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                ),
+                request,
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("Console API returned 429", response.body.decode("utf-8"))
 
     async def test_anthropic_messages_free_maps_to_real_model(self):
         request = _Request(app=SimpleNamespace(state=SimpleNamespace(repository=None)), state=_RequestState())

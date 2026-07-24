@@ -154,7 +154,6 @@ async def completions(
                     )
 
                     try:
-                        yield ": heartbeat\n\n"
                         async for event_type, data in stream_console_chat(
                             token, payload, timeout_s=timeout_s
                         ):

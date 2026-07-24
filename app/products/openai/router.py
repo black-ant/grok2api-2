@@ -158,6 +158,36 @@ async def _safe_sse(stream: AsyncIterable[str]) -> AsyncGenerator[str, None]:
         yield "data: [DONE]\n\n"
 
 
+async def _chain_first_sse(
+    first: str, stream: AsyncIterable[str]
+) -> AsyncGenerator[str, None]:
+    yield first
+    async for chunk in stream:
+        yield chunk
+
+
+async def _sse_response_or_error(stream: AsyncIterable[str]):
+    """Return an SSE response, or an HTTP error before headers are sent."""
+    iterator = stream.__aiter__()
+    try:
+        first = await anext(iterator)
+    except StopAsyncIteration:
+        return StreamingResponse(
+            iter(()), media_type="text/event-stream", headers=_SSE_HEADERS
+        )
+    except AppError as exc:
+        return JSONResponse(exc.to_dict(), status_code=exc.status)
+    except Exception as exc:
+        logger.exception("chat completions stream failed before first chunk: error={}", exc)
+        payload = {"error": {"message": str(exc), "type": "server_error"}}
+        return JSONResponse(payload, status_code=500)
+    return StreamingResponse(
+        _safe_sse(_chain_first_sse(first, iterator)),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
 _SSE_HEADERS = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
 
 
@@ -368,9 +398,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
 
     if isinstance(result, dict):
         return JSONResponse(result)
-    return StreamingResponse(
-        _safe_sse(result), media_type="text/event-stream", headers=_SSE_HEADERS
-    )
+    return await _sse_response_or_error(result)
 
 
 # ---------------------------------------------------------------------------
