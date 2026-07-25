@@ -159,6 +159,15 @@ class ConfigHtmlReviewFixTests(unittest.TestCase):
         self.assertIn("_getCurrentValue(section, field.key, field)", html)
 
 
+class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
+    def test_batch_model_list_keeps_visible_height(self):
+        html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
+
+        self.assertIn(".batch-list { flex:0 1 auto; min-height:120px; max-height:52vh;", html)
+        self.assertIn("function renderBatchModels", html)
+        self.assertIn("id=\"batch-model-list\"", html)
+
+
 class AdminTokenTaskReviewFixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         getattr(admin_tokens, "_background_tasks", set()).clear()
