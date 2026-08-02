@@ -163,7 +163,9 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
     def test_batch_model_list_keeps_visible_height(self):
         html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
 
-        self.assertIn(".batch-list { flex:0 1 auto; min-height:120px; max-height:52vh;", html)
+        self.assertIn(".batch-list { flex:0 0 auto; min-height:120px; max-height:52vh;", html)
+        self.assertIn(".batch-modal { width:min(880px,94vw); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; overflow-y:auto }", html)
+        self.assertIn(".batch-results { margin-top:12px; flex:0 0 auto; min-height:0; max-height:52vh; overflow:auto }", html)
         self.assertIn("function renderBatchModels", html)
         self.assertIn("id=\"batch-model-list\"", html)
 

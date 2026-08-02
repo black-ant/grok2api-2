@@ -60,12 +60,12 @@
     .account-key { font-size:12px; color:#444; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .account-badge { justify-self:start; display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f3f4f6; color:#374151; font-size:11px; font-weight:750; white-space:nowrap }
     #batch-modal { padding:16px; overflow-y:auto }
-    .batch-modal { width:min(880px,94vw); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; overflow:hidden }
-    .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
+    .batch-modal { width:min(880px,94vw); max-height:calc(100dvh - 32px); display:flex; flex-direction:column; overflow-y:auto }
+    .batch-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-shrink:0 }
     .batch-head .modal-title { margin-bottom:0 }
-    .batch-picks { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
-    .batch-status { font-size:12px; color:#666; margin-bottom:10px }
-    .batch-list { flex:0 1 auto; min-height:120px; max-height:52vh; overflow:auto; display:grid; gap:8px }
+    .batch-picks { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; flex-shrink:0 }
+    .batch-status { font-size:12px; color:#666; margin-bottom:10px; flex-shrink:0 }
+    .batch-list { flex:0 0 auto; min-height:120px; max-height:52vh; overflow:auto; display:grid; gap:8px }
     .batch-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e6dfd4; border-radius:12px; background:#fff }
     .batch-row.is-selected { border-color:#111 }
     .batch-row.is-running { border-color:#111; background:#fafafa }
@@ -77,7 +77,7 @@
     .batch-pill.is-pass { background:#dcfce7; color:#15803d }
     .batch-pill.is-fail { background:#ffedd5; color:#c2410c }
     .batch-pill.is-running { background:#111; color:#fff }
-    .batch-results { margin-top:12px; flex:1 1 0; min-height:0; overflow:auto }
+    .batch-results { margin-top:12px; flex:0 0 auto; min-height:0; max-height:52vh; overflow:auto }
     .batch-result-table { width:100%; border:1px solid #e6dfd4; border-radius:12px; border-spacing:0; overflow:hidden; background:#fff; font-size:12px }
     .batch-result-table th, .batch-result-table td { padding:9px 10px; border-bottom:1px solid #efe8dd; text-align:left; vertical-align:middle }
     .batch-result-table th { background:#faf9f5; color:#555; font-weight:800 }
@@ -88,6 +88,7 @@
     .result-model { max-width:300px; font-weight:750; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .result-meta { margin-top:3px; color:#666; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .result-actions { display:flex; justify-content:flex-end; gap:6px; white-space:nowrap }
+    .modal-footer { flex-shrink:0 }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
       .cap-form { grid-template-columns:1fr }
