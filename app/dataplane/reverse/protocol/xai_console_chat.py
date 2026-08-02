@@ -32,7 +32,7 @@ from typing import Any, AsyncGenerator
 
 import orjson
 
-from app.platform.errors import UpstreamError
+from app.platform.errors import UpstreamError, parse_retry_after
 from app.platform.logging.logger import logger
 
 
@@ -310,6 +310,9 @@ async def stream_console_chat(
                 f"Console API returned {response.status_code}",
                 status=response.status_code,
                 body=body,
+                retry_after_s=parse_retry_after(
+                    getattr(response, "headers", {}).get("Retry-After")
+                ),
             )
 
         await proxy.feedback(lease, _success_feedback())

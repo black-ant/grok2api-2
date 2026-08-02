@@ -58,12 +58,47 @@ def is_virtual_model(model_name: str) -> bool:
     return model_name in alias_map()
 
 
-def _first_enabled(candidates: Iterable[str]) -> tuple[str, ModelSpec] | None:
+def _first_enabled(
+    candidates: Iterable[str],
+    blocked_model_names: frozenset[str] | None = None,
+) -> tuple[str, ModelSpec] | None:
+    blocked = blocked_model_names or frozenset()
+    deferred: tuple[str, ModelSpec] | None = None
     for candidate in candidates:
         spec = registry.get(candidate)
-        if spec is not None and spec.enabled:
-            return candidate, spec
-    return None
+        if spec is None or not spec.enabled:
+            continue
+        if candidate in blocked:
+            if deferred is None:
+                deferred = candidate, spec
+            continue
+        return candidate, spec
+    return deferred
+
+
+def fallback_candidates(resolution: ModelResolution) -> tuple[str, ...]:
+    """Return lower-priority candidates compatible with the selected model."""
+    if not resolution.is_virtual:
+        return ()
+    try:
+        start = resolution.candidates.index(resolution.model) + 1
+    except ValueError:
+        return ()
+
+    result: list[str] = []
+    seen: set[str] = {resolution.model}
+    for candidate in resolution.candidates[start:]:
+        if candidate in seen:
+            continue
+        spec = registry.get(candidate)
+        if (
+            spec is not None
+            and spec.enabled
+            and spec.capability == resolution.spec.capability
+        ):
+            result.append(candidate)
+            seen.add(candidate)
+    return tuple(result)
 
 
 def resolve(
@@ -71,23 +106,35 @@ def resolve(
     *,
     available_pools: frozenset[str] | None = None,
     is_available=None,
+    blocked_model_names: frozenset[str] | None = None,
 ) -> ModelResolution | None:
     """Resolve a client model name to a real registered model.
 
     For virtual models, candidates are tried in configured order. When
     ``available_pools`` and ``is_available`` are provided, the first currently
-    routable candidate wins; otherwise the first enabled candidate wins.
+    routable candidate wins. Temporarily blocked candidates are skipped while
+    a non-blocked candidate is available.
     """
 
     aliases = alias_map()
     candidates = tuple(aliases.get(model_name) or ())
     if candidates:
+        blocked = blocked_model_names or frozenset()
+        deferred: tuple[str, ModelSpec] | None = None
         if available_pools is not None and is_available is not None:
             for candidate in candidates:
                 spec = registry.get(candidate)
-                if spec is not None and is_available(spec, available_pools):
-                    return ModelResolution(model_name, candidate, spec, True, candidates)
-        selected = _first_enabled(candidates)
+                if spec is None or not is_available(spec, available_pools):
+                    continue
+                if candidate in blocked:
+                    if deferred is None:
+                        deferred = candidate, spec
+                    continue
+                return ModelResolution(model_name, candidate, spec, True, candidates)
+            if deferred is not None:
+                candidate, spec = deferred
+                return ModelResolution(model_name, candidate, spec, True, candidates)
+        selected = _first_enabled(candidates, blocked)
         if selected is None:
             return None
         candidate, spec = selected
@@ -121,6 +168,7 @@ def list_virtual_models(
 __all__ = [
     "ModelResolution",
     "alias_map",
+    "fallback_candidates",
     "is_virtual_model",
     "list_virtual_models",
     "resolve",

@@ -37,6 +37,42 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.model, "grok-4.3-beta")
 
+    def test_resolves_virtual_model_around_temporarily_blocked_candidate(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={
+                "FREE": ["grok-4.3-console", "grok-4.20-0309-console"],
+            },
+        ):
+            resolved = aliases.resolve(
+                "FREE",
+                blocked_model_names=frozenset({"grok-4.3-console"}),
+            )
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.model, "grok-4.20-0309-console")
+
+    def test_virtual_model_fallback_candidates_follow_mapping_order(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={
+                "FREE": [
+                    "grok-4.3-console",
+                    "grok-4.20-0309-console",
+                    "grok-4.20-auto",
+                ],
+            },
+        ):
+            resolved = aliases.resolve("FREE")
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(
+            aliases.fallback_candidates(resolved),
+            ("grok-4.20-0309-console",),
+        )
+
     def test_real_model_still_resolves_for_backward_compatibility(self):
         with patch.object(aliases, "get_config", return_value={}):
             resolved = aliases.resolve("grok-4.20-auto")

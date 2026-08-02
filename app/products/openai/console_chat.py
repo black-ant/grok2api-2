@@ -23,6 +23,13 @@ from app.platform.tokens import estimate_prompt_tokens, estimate_tokens
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
 from app.control.account.runtime import get_refresh_service
+from app.control.model.cooldown import (
+    ModelAdmission,
+    admit_model,
+    mark_model_success,
+    mark_rate_limited,
+    release_probe,
+)
 from app.control.model.registry import resolve as resolve_model
 from app.dataplane.account.selector import current_strategy
 from app.dataplane.reverse.protocol.xai_console_chat import (
@@ -31,11 +38,22 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
     stream_console_chat,
 )
 from app.products._account_selection import reserve_account, selection_max_retries
-from app.products.openai.chat import _configured_retry_codes, _should_retry_upstream
+from app.products._model_fallback import (
+    cooldown_seconds,
+    fallback_limit,
+    jitter_ratio,
+    max_cooldown_seconds,
+    next_fallback_candidate,
+    record_fallback,
+)
+from app.products.openai.chat import (
+    _configured_retry_codes,
+    _set_request_log_routing,
+    _should_retry_upstream,
+)
 from ._format import (
     make_response_id,
     make_stream_chunk,
-    make_thinking_chunk,
     make_chat_response,
     build_usage,
 )
@@ -99,17 +117,24 @@ async def completions(
     temperature: float = 0.7,
     top_p: float = 0.95,
     force_token: str | None = None,
+    model_fallbacks: tuple[str, ...] = (),
+    request_log_routing: dict[str, Any] | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for console.x.ai chat completions.
 
     Returns an async generator for streaming, or a dict for non-streaming.
     """
     cfg = get_config()
-    spec = resolve_model(model)
     effort = _reasoning_effort_from_emit_think(emit_think)
     timeout_s = cfg.get_float("chat.timeout", 120.0)
     max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
+    model_fallback_budget = fallback_limit(
+        cfg,
+        tuple(model_fallbacks),
+        force_token=force_token,
+    )
+    max_attempts = max_retries + model_fallback_budget + 1
     response_id = make_response_id()
 
     logger.info(
@@ -126,27 +151,72 @@ async def completions(
     if stream:
         async def _run_stream() -> AsyncGenerator[str, None]:
             excluded: list[str] = []
-            for attempt in range(max_retries + 1):
+            account_retries = 0
+            model_fallback_used = 0
+            current_model = model
+            for attempt in range(max_attempts):
+                admission = admit_model(current_model)
+                if admission is ModelAdmission.BLOCKED:
+                    fallback = next_fallback_candidate(
+                        tuple(model_fallbacks),
+                        model_fallback_used,
+                        model_fallback_budget,
+                    )
+                    if fallback is None:
+                        raise RateLimitError(
+                            f"Model {current_model!r} is cooling down and no fallback is available"
+                        )
+                    fallback_index, fallback_model = fallback
+                    previous_model = current_model
+                    current_model = fallback_model
+                    model_fallback_used = fallback_index + 1
+                    record_fallback(
+                        request_log_routing,
+                        from_model=previous_model,
+                        to_model=current_model,
+                        status=429,
+                    )
+                    logger.warning(
+                        "model recovery probe busy; fallback: from={} to={}",
+                        previous_model,
+                        current_model,
+                    )
+                    continue
+                current_spec = resolve_model(current_model)
+                if current_spec is None:
+                    if admission is ModelAdmission.PROBE:
+                        release_probe(current_model)
+                    raise RateLimitError(f"Model {current_model!r} is not available")
                 acct, selected_mode_id = await reserve_account(
                     directory,
-                    spec,
+                    current_spec,
                     now_s_override=now_s(),
                     exclude_tokens=excluded or None,
                     only_token=force_token,
                 )
                 if acct is None:
+                    if admission is ModelAdmission.PROBE:
+                        release_probe(current_model)
                     raise RateLimitError("No available accounts for this model tier")
 
                 token = acct.token
+                _set_request_log_routing(
+                    request_log_routing,
+                    model=current_model,
+                    token=token,
+                    mode_id=selected_mode_id,
+                    pool_id=acct.pool_id,
+                )
                 success = False
                 fail_exc: BaseException | None = None
                 _retry = False
                 adapter = ConsoleStreamAdapter()
+                stream_started = False
 
                 try:
                     payload = build_console_payload(
                         messages=messages,
-                        model=model,
+                        model=current_model,
                         temperature=temperature,
                         top_p=top_p,
                         reasoning_effort=effort,
@@ -159,7 +229,8 @@ async def completions(
                         ):
                             tokens = adapter.feed(event_type, data)
                             for tok in tokens:
-                                chunk = make_stream_chunk(response_id, model, tok)
+                                chunk = make_stream_chunk(response_id, current_model, tok)
+                                stream_started = True
                                 yield f"data: {orjson.dumps(chunk).decode()}\n\n"
 
                         # 流结束，发送 final chunk
@@ -174,31 +245,76 @@ async def completions(
                         )
                         usage = build_usage(prompt_tokens, completion_tokens)
                         final = make_stream_chunk(
-                            response_id, model, "", is_final=True
+                            response_id, current_model, "", is_final=True
                         )
                         final["usage"] = usage
+                        stream_started = True
                         yield f"data: {orjson.dumps(final).decode()}\n\n"
+                        stream_started = True
                         yield "data: [DONE]\n\n"
                         success = True
                         logger.info(
                             "console chat stream completed: attempt={}/{} model={} tokens={}",
-                            attempt + 1, max_retries + 1, model,
+                            attempt + 1, max_attempts, current_model,
                             (usage_data or {}).get("total_tokens", "?"),
                         )
 
                     except UpstreamError as exc:
                         fail_exc = exc
-                        if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
-                            _retry = True
-                            logger.warning(
-                                "console chat retry: attempt={}/{} status={} token={}...",
-                                attempt + 1, max_retries, exc.status, token[:8],
+                        if exc.status == 429 and model_fallback_budget > 0:
+                            mark_rate_limited(
+                                current_model,
+                                cooldown_seconds(cfg),
+                                max_cooldown_sec=max_cooldown_seconds(cfg),
+                                retry_after_sec=getattr(exc, "retry_after_s", None),
+                                jitter_ratio=jitter_ratio(cfg),
                             )
+                        if (
+                            _should_retry_upstream(exc, retry_codes)
+                            or (exc.status == 429 and model_fallback_budget > 0)
+                        ):
+                            fallback = next_fallback_candidate(
+                                tuple(model_fallbacks),
+                                model_fallback_used,
+                                model_fallback_budget,
+                            )
+                            if exc.status == 429 and fallback is not None and not stream_started:
+                                fallback_index, fallback_model = fallback
+                                previous_model = current_model
+                                current_model = fallback_model
+                                model_fallback_used = fallback_index + 1
+                                record_fallback(
+                                    request_log_routing,
+                                    from_model=previous_model,
+                                    to_model=current_model,
+                                    status=exc.status,
+                                )
+                                _retry = True
+                                logger.warning(
+                                    "console chat model fallback: from={} to={} status={} token={}...",
+                                    previous_model,
+                                    current_model,
+                                    exc.status,
+                                    token[:8],
+                                )
+                            elif (
+                                _should_retry_upstream(exc, retry_codes)
+                                and account_retries < max_retries
+                                and not stream_started
+                            ):
+                                account_retries += 1
+                                _retry = True
+                                logger.warning(
+                                    "console chat retry: attempt={}/{} status={} token={}...",
+                                    attempt + 1, max_attempts, exc.status, token[:8],
+                                )
                         else:
                             logger.warning(
                                 "console chat upstream failed: model={} status={} attempt={}/{}",
-                                model, exc.status, attempt + 1, max_retries + 1,
+                                current_model, exc.status, attempt + 1, max_attempts,
                             )
+                            raise
+                        if not _retry:
                             raise
 
                 finally:
@@ -217,6 +333,13 @@ async def completions(
                         asyncio.create_task(
                             _fail_sync(token, selected_mode_id, fail_exc)
                         ).add_done_callback(_log_task_exception)
+                    if success:
+                        mark_model_success(current_model)
+                    elif not (
+                        isinstance(fail_exc, UpstreamError)
+                        and fail_exc.status == 429
+                    ):
+                        release_probe(current_model)
 
                 if success or not _retry:
                     return
@@ -226,26 +349,71 @@ async def completions(
 
     # ── Non-streaming path ────────────────────────────────────────────────────
     excluded: list[str] = []
-    for attempt in range(max_retries + 1):
+    account_retries = 0
+    model_fallback_used = 0
+    current_model = model
+    for attempt in range(max_attempts):
+        admission = admit_model(current_model)
+        if admission is ModelAdmission.BLOCKED:
+            fallback = next_fallback_candidate(
+                tuple(model_fallbacks),
+                model_fallback_used,
+                model_fallback_budget,
+            )
+            if fallback is None:
+                raise RateLimitError(
+                    f"Model {current_model!r} is cooling down and no fallback is available"
+                )
+            fallback_index, fallback_model = fallback
+            previous_model = current_model
+            current_model = fallback_model
+            model_fallback_used = fallback_index + 1
+            record_fallback(
+                request_log_routing,
+                from_model=previous_model,
+                to_model=current_model,
+                status=429,
+            )
+            logger.warning(
+                "model recovery probe busy; fallback: from={} to={}",
+                previous_model,
+                current_model,
+            )
+            continue
+        current_spec = resolve_model(current_model)
+        if current_spec is None:
+            if admission is ModelAdmission.PROBE:
+                release_probe(current_model)
+            raise RateLimitError(f"Model {current_model!r} is not available")
         acct, selected_mode_id = await reserve_account(
             directory,
-            spec,
+            current_spec,
             now_s_override=now_s(),
             exclude_tokens=excluded or None,
             only_token=force_token,
         )
         if acct is None:
+            if admission is ModelAdmission.PROBE:
+                release_probe(current_model)
             raise RateLimitError("No available accounts for this model tier")
 
         token = acct.token
+        _set_request_log_routing(
+            request_log_routing,
+            model=current_model,
+            token=token,
+            mode_id=selected_mode_id,
+            pool_id=acct.pool_id,
+        )
         success = False
         fail_exc: BaseException | None = None
+        _retry = False
         adapter = ConsoleStreamAdapter()
 
         try:
             payload = build_console_payload(
                 messages=messages,
-                model=model,
+                model=current_model,
                 temperature=temperature,
                 top_p=top_p,
                 reasoning_effort=effort,
@@ -269,25 +437,69 @@ async def completions(
                 )
                 usage = build_usage(prompt_tokens, completion_tokens)
                 result = make_chat_response(
-                    model, adapter.full_text, response_id=response_id, usage=usage
+                    current_model,
+                    adapter.full_text,
+                    response_id=response_id,
+                    usage=usage,
                 )
                 success = True
                 logger.info(
                     "console chat non-stream completed: model={} tokens={}",
-                    model, (usage_data or {}).get("total_tokens", "?"),
+                    current_model, (usage_data or {}).get("total_tokens", "?"),
                 )
                 return result
 
             except UpstreamError as exc:
                 fail_exc = exc
-                if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
-                    logger.warning(
-                        "console chat non-stream retry: attempt={}/{} status={}",
-                        attempt + 1, max_retries, exc.status,
+                if exc.status == 429 and model_fallback_budget > 0:
+                    mark_rate_limited(
+                        current_model,
+                        cooldown_seconds(cfg),
+                        max_cooldown_sec=max_cooldown_seconds(cfg),
+                        retry_after_sec=getattr(exc, "retry_after_s", None),
+                        jitter_ratio=jitter_ratio(cfg),
                     )
-                    excluded.append(token)
-                    continue
-                raise
+                if (
+                    _should_retry_upstream(exc, retry_codes)
+                    or (exc.status == 429 and model_fallback_budget > 0)
+                ):
+                    fallback = next_fallback_candidate(
+                        tuple(model_fallbacks),
+                        model_fallback_used,
+                        model_fallback_budget,
+                    )
+                    if exc.status == 429 and fallback is not None:
+                        fallback_index, fallback_model = fallback
+                        previous_model = current_model
+                        current_model = fallback_model
+                        model_fallback_used = fallback_index + 1
+                        record_fallback(
+                            request_log_routing,
+                            from_model=previous_model,
+                            to_model=current_model,
+                            status=exc.status,
+                        )
+                        _retry = True
+                        logger.warning(
+                            "console chat non-stream model fallback: from={} to={} status={} token={}...",
+                            previous_model,
+                            current_model,
+                            exc.status,
+                            token[:8],
+                        )
+                    elif _should_retry_upstream(exc, retry_codes) and account_retries < max_retries:
+                        account_retries += 1
+                        _retry = True
+                        logger.warning(
+                            "console chat non-stream retry: attempt={}/{} status={}",
+                            attempt + 1,
+                            max_attempts,
+                            exc.status,
+                        )
+                    else:
+                        raise
+                else:
+                    raise
 
         finally:
             await directory.release(acct)
@@ -305,6 +517,15 @@ async def completions(
                 asyncio.create_task(
                     _fail_sync(token, selected_mode_id, fail_exc)
                 ).add_done_callback(_log_task_exception)
+            if success:
+                mark_model_success(current_model)
+            elif not (
+                isinstance(fail_exc, UpstreamError)
+                and fail_exc.status == 429
+            ):
+                release_probe(current_model)
+        if not success and _retry:
+            excluded.append(token)
 
     raise RateLimitError("No available accounts after retries")
 

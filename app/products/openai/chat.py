@@ -10,7 +10,7 @@ import orjson
 
 from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
-from app.platform.errors import RateLimitError, UpstreamError, ValidationError
+from app.platform.errors import RateLimitError, UpstreamError, ValidationError, parse_retry_after
 from app.platform.runtime.clock import now_s
 from app.platform.storage import save_local_image
 from app.platform.tokens import (
@@ -20,6 +20,13 @@ from app.platform.tokens import (
 )
 from app.control.account.runtime import get_refresh_service
 from app.control.account.invalid_credentials import feedback_kind_for_error
+from app.control.model.cooldown import (
+    ModelAdmission,
+    admit_model,
+    mark_model_success,
+    mark_rate_limited,
+    release_probe,
+)
 from app.control.model.registry import resolve as resolve_model
 from app.control.model.enums import ModeId
 from app.control.account.enums import FeedbackKind
@@ -58,6 +65,14 @@ from ._format import (
 )
 from ._tool_sieve import ToolSieve
 from app.products._account_selection import reserve_account, selection_max_retries
+from app.products._model_fallback import (
+    cooldown_seconds,
+    fallback_limit,
+    jitter_ratio,
+    max_cooldown_seconds,
+    next_fallback_candidate,
+    record_fallback,
+)
 
 
 def _to_chat_annotations(anns: list[dict]) -> list[dict]:
@@ -463,6 +478,9 @@ async def _stream_chat(
                 f"Chat upstream returned {response.status_code}",
                 status=response.status_code,
                 body=body,
+                retry_after_s=parse_retry_after(
+                    getattr(response, "headers", {}).get("Retry-After")
+                ),
             )
 
         try:
@@ -486,13 +504,14 @@ async def completions(
     top_p: float = 0.95,
     request_overrides: dict | None = None,
     force_token: str | None = None,
+    model_fallbacks: tuple[str, ...] = (),
     request_log_routing: dict[str, Any] | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for /v1/chat/completions.
 
     Returns an async generator for streaming, or a dict for non-streaming.
-    Supports transparent retry with a different account on configured HTTP
-    status codes (chat.retry_on_codes) up to chat.max_retries times.
+    Supports account retries on configured HTTP status codes and ordered model
+    fallback for virtual models after upstream 429 responses.
     """
     cfg = get_config()
     spec = resolve_model(model)
@@ -519,6 +538,8 @@ async def completions(
             temperature=temperature,
             top_p=top_p,
             force_token=force_token,
+            model_fallbacks=model_fallbacks,
+            request_log_routing=request_log_routing,
         )
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -534,6 +555,12 @@ async def completions(
 
     max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
+    model_fallback_budget = fallback_limit(
+        cfg,
+        tuple(model_fallbacks),
+        force_token=force_token,
+    )
+    max_attempts = max_retries + model_fallback_budget + 1
     response_id = make_response_id()
     timeout_s = cfg.get_float("chat.timeout", 120.0)
 
@@ -550,21 +577,58 @@ async def completions(
 
         async def _run_stream() -> AsyncGenerator[str, None]:
             excluded: list[str] = []
-            for attempt in range(max_retries + 1):
+            account_retries = 0
+            model_fallback_used = 0
+            current_model = model
+            for attempt in range(max_attempts):
+                admission = admit_model(current_model)
+                if admission is ModelAdmission.BLOCKED:
+                    fallback = next_fallback_candidate(
+                        tuple(model_fallbacks),
+                        model_fallback_used,
+                        model_fallback_budget,
+                    )
+                    if fallback is None:
+                        raise RateLimitError(
+                            f"Model {current_model!r} is cooling down and no fallback is available"
+                        )
+                    fallback_index, fallback_model = fallback
+                    previous_model = current_model
+                    current_model = fallback_model
+                    model_fallback_used = fallback_index + 1
+                    record_fallback(
+                        request_log_routing,
+                        from_model=previous_model,
+                        to_model=current_model,
+                        status=429,
+                    )
+                    logger.warning(
+                        "model recovery probe busy; fallback: from={} to={}",
+                        previous_model,
+                        current_model,
+                    )
+                    continue
+                current_spec = resolve_model(current_model)
+                if current_spec is None:
+                    if admission is ModelAdmission.PROBE:
+                        release_probe(current_model)
+                    raise RateLimitError(f"Model {current_model!r} is not available")
                 acct, selected_mode_id = await reserve_account(
                     directory,
-                    spec,
+                    current_spec,
                     now_s_override=now_s(),
                     exclude_tokens=excluded or None,
                     only_token=force_token,
                 )
                 if acct is None:
+                    if admission is ModelAdmission.PROBE:
+                        release_probe(current_model)
                     raise RateLimitError("No available accounts for this model tier")
 
                 token = acct.token
                 _set_request_log_routing(
                     request_log_routing,
-                    model=model,
+                    model=current_model,
                     token=token,
                     mode_id=selected_mode_id,
                     pool_id=acct.pool_id,
@@ -574,6 +638,7 @@ async def completions(
                 fail_exc: BaseException | None = None
                 adapter = StreamAdapter()
                 collected_annotations: list[dict] = []
+                stream_started = False
 
                 try:
                     try:
@@ -603,46 +668,52 @@ async def completions(
                                         safe_text, parsed_calls = sieve.feed(ev.content)
                                         if safe_text:
                                             chunk = make_stream_chunk(
-                                                response_id, model, safe_text
+                                                response_id, current_model, safe_text
                                             )
+                                            stream_started = True
                                             yield f"data: {orjson.dumps(chunk).decode()}\n\n"
                                         if parsed_calls is not None:
                                             for i, tc in enumerate(parsed_calls):
                                                 chunk = make_tool_call_chunk(
                                                     response_id,
-                                                    model,
+                                                    current_model,
                                                     i,
                                                     tc.call_id,
                                                     tc.name,
                                                     tc.arguments,
                                                     is_first=True,
                                                 )
+                                                stream_started = True
                                                 yield f"data: {orjson.dumps(chunk).decode()}\n\n"
                                             done_chunk = make_tool_call_done_chunk(
-                                                response_id, model
+                                                response_id, current_model
                                             )
+                                            stream_started = True
                                             yield f"data: {orjson.dumps(done_chunk).decode()}\n\n"
+                                            stream_started = True
                                             yield "data: [DONE]\n\n"
                                             tool_calls_emitted = True
                                             success = True
                                             logger.info(
                                                 "chat stream tool_calls: attempt={}/{} model={} call_count={}",
                                                 attempt + 1,
-                                                max_retries + 1,
-                                                model,
+                                                max_attempts,
+                                                current_model,
                                                 len(parsed_calls),
                                             )
                                             ended = True
                                             break  # stop processing remaining events in this batch
                                     else:
                                         chunk = make_stream_chunk(
-                                            response_id, model, ev.content
+                                            response_id, current_model, ev.content
                                         )
+                                        stream_started = True
                                         yield f"data: {orjson.dumps(chunk).decode()}\n\n"
                                 elif ev.kind == "thinking" and emit_think:
                                     chunk = make_thinking_chunk(
-                                        response_id, model, ev.content
+                                        response_id, current_model, ev.content
                                     )
+                                    stream_started = True
                                     yield f"data: {orjson.dumps(chunk).decode()}\n\n"
                                 elif ev.kind == "annotation" and ev.annotation_data:
                                     collected_annotations.append(ev.annotation_data)
@@ -659,28 +730,31 @@ async def completions(
                                 for i, tc in enumerate(flushed_calls):
                                     chunk = make_tool_call_chunk(
                                         response_id,
-                                        model,
+                                        current_model,
                                         i,
                                         tc.call_id,
                                         tc.name,
                                         tc.arguments,
                                         is_first=True,
                                     )
+                                    stream_started = True
                                     yield f"data: {orjson.dumps(chunk).decode()}\n\n"
                                 done_chunk = make_tool_call_done_chunk(
-                                    response_id, model
+                                    response_id, current_model
                                 )
                                 # 注入结构化搜索信源（tool_calls 场景）
                                 sources = adapter.search_sources_list()
                                 if sources:
                                     done_chunk["search_sources"] = sources
+                                stream_started = True
                                 yield f"data: {orjson.dumps(done_chunk).decode()}\n\n"
+                                stream_started = True
                                 yield "data: [DONE]\n\n"
                                 tool_calls_emitted = True
                                 success = True
                                 logger.info(
                                     "chat stream tool_calls (flushed): model={} call_count={}",
-                                    model,
+                                    current_model,
                                     len(flushed_calls),
                                 )
 
@@ -688,21 +762,23 @@ async def completions(
                             for url, img_id in adapter.image_urls:
                                 img_text = await _resolve_image(token, url, img_id)
                                 chunk = make_stream_chunk(
-                                    response_id, model, img_text + "\n"
+                                    response_id, current_model, img_text + "\n"
                                 )
+                                stream_started = True
                                 yield f"data: {orjson.dumps(chunk).decode()}\n\n"
 
                             references = adapter.references_suffix()
                             if references:
                                 chunk = make_stream_chunk(
-                                    response_id, model, references
+                                    response_id, current_model, references
                                 )
+                                stream_started = True
                                 yield f"data: {orjson.dumps(chunk).decode()}\n\n"
 
                             chat_anns = _to_chat_annotations(collected_annotations)
                             final = make_stream_chunk(
                                 response_id,
-                                model,
+                                current_model,
                                 "",
                                 is_final=True,
                                 annotations=chat_anns or None,
@@ -711,40 +787,82 @@ async def completions(
                             sources = adapter.search_sources_list()
                             if sources:
                                 final["search_sources"] = sources
+                            stream_started = True
                             yield f"data: {orjson.dumps(final).decode()}\n\n"
+                            stream_started = True
                             yield "data: [DONE]\n\n"
                             success = True
                             logger.info(
                                 "chat stream completed: attempt={}/{} model={} image_count={}",
                                 attempt + 1,
-                                max_retries + 1,
-                                model,
+                                max_attempts,
+                                current_model,
                                 len(adapter.image_urls),
                             )
 
                     except UpstreamError as exc:
                         fail_exc = exc
+                        if exc.status == 429 and model_fallback_budget > 0:
+                            mark_rate_limited(
+                                current_model,
+                                cooldown_seconds(cfg),
+                                max_cooldown_sec=max_cooldown_seconds(cfg),
+                                retry_after_sec=getattr(exc, "retry_after_s", None),
+                                jitter_ratio=jitter_ratio(cfg),
+                            )
                         if (
                             _should_retry_upstream(exc, retry_codes)
-                            and attempt < max_retries
+                            or (exc.status == 429 and model_fallback_budget > 0)
                         ):
-                            _retry = True
-                            logger.warning(
-                                "chat stream retry scheduled: attempt={}/{} status={} token={}...",
-                                attempt + 1,
-                                max_retries,
-                                exc.status,
-                                token[:8],
+                            fallback = next_fallback_candidate(
+                                tuple(model_fallbacks),
+                                model_fallback_used,
+                                model_fallback_budget,
                             )
+                            if exc.status == 429 and fallback is not None and not stream_started:
+                                fallback_index, fallback_model = fallback
+                                previous_model = current_model
+                                current_model = fallback_model
+                                model_fallback_used = fallback_index + 1
+                                record_fallback(
+                                    request_log_routing,
+                                    from_model=previous_model,
+                                    to_model=current_model,
+                                    status=exc.status,
+                                )
+                                _retry = True
+                                logger.warning(
+                                    "chat stream model fallback: from={} to={} status={} token={}...",
+                                    previous_model,
+                                    current_model,
+                                    exc.status,
+                                    token[:8],
+                                )
+                            elif (
+                                _should_retry_upstream(exc, retry_codes)
+                                and account_retries < max_retries
+                                and not stream_started
+                            ):
+                                account_retries += 1
+                                _retry = True
+                                logger.warning(
+                                    "chat stream retry scheduled: attempt={}/{} status={} token={}...",
+                                    attempt + 1,
+                                    max_attempts,
+                                    exc.status,
+                                    token[:8],
+                                )
                         else:
                             logger.warning(
                                 "chat stream upstream failed: attempt={}/{} model={} status={} body={}",
                                 attempt + 1,
-                                max_retries + 1,
-                                model,
+                                max_attempts,
+                                current_model,
                                 exc.status,
                                 _upstream_body_excerpt(exc),
                             )
+                            raise
+                        if not _retry:
                             raise
 
                 finally:
@@ -767,6 +885,13 @@ async def completions(
                         asyncio.create_task(
                             _fail_sync(token, selected_mode_id, fail_exc)
                         ).add_done_callback(_log_task_exception)
+                    if success:
+                        mark_model_success(current_model)
+                    elif not (
+                        isinstance(fail_exc, UpstreamError)
+                        and fail_exc.status == 429
+                    ):
+                        release_probe(current_model)
 
                 if success or not _retry:
                     return
@@ -778,21 +903,58 @@ async def completions(
     excluded: list[str] = []
     token = ""
     adapter = StreamAdapter()
-    for attempt in range(max_retries + 1):
+    account_retries = 0
+    model_fallback_used = 0
+    current_model = model
+    for attempt in range(max_attempts):
+        admission = admit_model(current_model)
+        if admission is ModelAdmission.BLOCKED:
+            fallback = next_fallback_candidate(
+                tuple(model_fallbacks),
+                model_fallback_used,
+                model_fallback_budget,
+            )
+            if fallback is None:
+                raise RateLimitError(
+                    f"Model {current_model!r} is cooling down and no fallback is available"
+                )
+            fallback_index, fallback_model = fallback
+            previous_model = current_model
+            current_model = fallback_model
+            model_fallback_used = fallback_index + 1
+            record_fallback(
+                request_log_routing,
+                from_model=previous_model,
+                to_model=current_model,
+                status=429,
+            )
+            logger.warning(
+                "model recovery probe busy; fallback: from={} to={}",
+                previous_model,
+                current_model,
+            )
+            continue
+        current_spec = resolve_model(current_model)
+        if current_spec is None:
+            if admission is ModelAdmission.PROBE:
+                release_probe(current_model)
+            raise RateLimitError(f"Model {current_model!r} is not available")
         acct, selected_mode_id = await reserve_account(
             directory,
-            spec,
+            current_spec,
             now_s_override=now_s(),
             exclude_tokens=excluded or None,
             only_token=force_token,
         )
         if acct is None:
+            if admission is ModelAdmission.PROBE:
+                release_probe(current_model)
             raise RateLimitError("No available accounts for this model tier")
 
         token = acct.token
         _set_request_log_routing(
             request_log_routing,
-            model=model,
+            model=current_model,
             token=token,
             mode_id=selected_mode_id,
             pool_id=acct.pool_id,
@@ -829,24 +991,63 @@ async def completions(
 
             except UpstreamError as exc:
                 fail_exc = exc
-                if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
-                    _retry = True
-                    logger.warning(
-                        "chat retry scheduled: attempt={}/{} status={} token={}...",
-                        attempt + 1,
-                        max_retries,
-                        exc.status,
-                        token[:8],
+                if exc.status == 429 and model_fallback_budget > 0:
+                    mark_rate_limited(
+                        current_model,
+                        cooldown_seconds(cfg),
+                        max_cooldown_sec=max_cooldown_seconds(cfg),
+                        retry_after_sec=getattr(exc, "retry_after_s", None),
+                        jitter_ratio=jitter_ratio(cfg),
                     )
+                if (
+                    _should_retry_upstream(exc, retry_codes)
+                    or (exc.status == 429 and model_fallback_budget > 0)
+                ):
+                    fallback = next_fallback_candidate(
+                        tuple(model_fallbacks),
+                        model_fallback_used,
+                        model_fallback_budget,
+                    )
+                    if exc.status == 429 and fallback is not None:
+                        fallback_index, fallback_model = fallback
+                        previous_model = current_model
+                        current_model = fallback_model
+                        model_fallback_used = fallback_index + 1
+                        record_fallback(
+                            request_log_routing,
+                            from_model=previous_model,
+                            to_model=current_model,
+                            status=exc.status,
+                        )
+                        _retry = True
+                        logger.warning(
+                            "chat model fallback: from={} to={} status={} token={}...",
+                            previous_model,
+                            current_model,
+                            exc.status,
+                            token[:8],
+                        )
+                    elif _should_retry_upstream(exc, retry_codes) and account_retries < max_retries:
+                        account_retries += 1
+                        _retry = True
+                        logger.warning(
+                            "chat retry scheduled: attempt={}/{} status={} token={}...",
+                            attempt + 1,
+                            max_attempts,
+                            exc.status,
+                            token[:8],
+                        )
                 else:
                     logger.warning(
                         "chat upstream failed: attempt={}/{} model={} status={} body={}",
                         attempt + 1,
-                        max_retries + 1,
-                        model,
+                        max_attempts,
+                        current_model,
                         exc.status,
                         _upstream_body_excerpt(exc),
                     )
+                    raise
+                if not _retry:
                     raise
 
         finally:
@@ -867,6 +1068,13 @@ async def completions(
                 asyncio.create_task(
                     _fail_sync(token, selected_mode_id, fail_exc)
                 ).add_done_callback(_log_task_exception)
+            if success:
+                mark_model_success(current_model)
+            elif not (
+                isinstance(fail_exc, UpstreamError)
+                and fail_exc.status == 429
+            ):
+                release_probe(current_model)
 
         if success or not _retry:
             break
@@ -899,13 +1107,13 @@ async def completions(
             logger.info(
                 "chat request tool_calls: attempt={}/{} model={} call_count={}",
                 attempt + 1,
-                max_retries + 1,
-                model,
+                max_attempts,
+                current_model,
                 len(parse_result.calls),
             )
             pt = estimate_prompt_tokens(message)
             resp = make_tool_call_response(
-                model,
+                current_model,
                 parse_result.calls,
                 prompt_content=message,
                 response_id=response_id,
@@ -920,8 +1128,8 @@ async def completions(
     logger.info(
         "chat request completed: attempt={}/{} model={} text_len={} reasoning_len={} image_count={}",
         attempt + 1,
-        max_retries + 1,
-        model,
+        max_attempts,
+        current_model,
         len(full_text),
         len(thinking_text or ""),
         len(adapter.image_urls),
@@ -932,7 +1140,7 @@ async def completions(
     rt = estimate_tokens(thinking_text) if thinking_text else 0
     chat_anns = _to_chat_annotations(adapter.annotations_list())
     return make_chat_response(
-        model,
+        current_model,
         full_text,
         prompt_content=message,
         response_id=response_id,

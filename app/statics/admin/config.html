@@ -444,6 +444,7 @@ const SCHEMA_DEF = [
           { key: 'stream', label: '默认流式输出', labelKey: 'config.schema.fields.stream.label', type: 'bool', desc: '请求未显式指定 stream 参数时所采用的默认值。', descKey: 'config.schema.fields.stream.desc' },
           { key: 'thinking', label: '默认思考输出', labelKey: 'config.schema.fields.thinking.label', type: 'bool', desc: '请求未显式指定 thinking 参数时所采用的默认值。启用后将在 reasoning_content 字段返回思考过程。', descKey: 'config.schema.fields.thinking.desc' },
           { key: 'auto_chat_mode_fallback', label: 'AUTO 聊天模式回退', labelKey: 'config.schema.fields.autoChatModeFallback.label', type: 'bool', desc: 'AUTO 聊天模型在 auto 额度不可用时，自动尝试 fast 和 expert 聊天额度窗口。', descKey: 'config.schema.fields.autoChatModeFallback.desc' },
+          { key: 'auto_model_fallback', label: '429 模型自动降级', type: 'bool', desc: '虚拟模型收到上游 429 时，按模型映射顺序切换到下一个兼容候选模型，并对当前模型临时冷却。' },
           { key: 'thinking_summary', label: '思考精简输出', labelKey: 'config.schema.fields.thinkingSummary.label', type: 'bool', desc: '启用后将思考过程提炼为结构化摘要。关闭时输出完整的原始推理过程，支持多 Agent 模型的协作详情与工具调用展示。', descKey: 'config.schema.fields.thinkingSummary.desc' },
           { key: 'dynamic_statsig', label: '动态 Statsig', labelKey: 'config.schema.fields.dynamicStatsig.label', type: 'bool', desc: '为每次请求动态生成 Statsig 设备指纹，以降低风控拦截概率。', descKey: 'config.schema.fields.dynamicStatsig.desc' },
           { key: 'enable_nsfw', label: '允许 NSFW 生成', labelKey: 'config.schema.fields.enableNsfw.label', type: 'bool', desc: '允许图像生成接口绕过 NSFW 内容过滤。', descKey: 'config.schema.fields.enableNsfw.desc' },
@@ -691,6 +692,10 @@ const SCHEMA_DEF = [
         section: 'retry',
         fields: [
           { key: 'max_retries', label: '应用层重试上限', labelKey: 'config.schema.fields.maxRetries.label', type: 'number', desc: '请求失败后的应用层最大重试次数；0 表示不重试。适用于 chat.completions 与 responses 端点。', descKey: 'config.schema.fields.maxRetries.desc' },
+          { key: 'model_fallback_max_retries', label: '429 模型降级次数', type: 'number', min: 0, desc: '虚拟模型收到 429 时最多尝试的低优先级候选模型数量；0 表示关闭模型降级。' },
+          { key: 'model_fallback_cooldown_sec', label: '模型 429 冷却（秒）', type: 'number', min: 0, desc: '模型收到 429 后暂时跳过的时间；0 表示不做跨请求冷却。' },
+          { key: 'model_fallback_max_cooldown_sec', label: '模型 429 最大冷却（秒）', type: 'number', min: 0, desc: '指数退避的最大冷却时间；必须不小于基础冷却时间。' },
+          { key: 'model_fallback_jitter_ratio', label: '模型冷却随机抖动', type: 'number', min: 0, max: 1, desc: '冷却时间随机增加比例；0.1 表示最多增加 10%，用于错开并发恢复。' },
           { key: 'on_codes', label: '应用层重试触发状态码', labelKey: 'config.schema.fields.retryCodes.label', type: 'text', desc: '收到指定 HTTP 状态码时触发应用层重试，多个值请使用英文逗号分隔，例如 429,503。', descKey: 'config.schema.fields.retryCodes.desc' },
           { key: 'reset_session_status_codes', label: '传输层会话重建状态码', labelKey: 'config.schema.fields.resetSessionCodes.label', type: 'text', desc: '收到指定 HTTP 状态码时自动重建传输层代理会话（Transport Session），多个值请使用英文逗号分隔。', descKey: 'config.schema.fields.resetSessionCodes.desc' },
         ]

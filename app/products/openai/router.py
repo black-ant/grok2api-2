@@ -15,6 +15,7 @@ from app.platform.errors import AppError, ValidationError
 from app.platform.logging.logger import logger
 from app.platform.storage import image_files_dir, video_files_dir
 from app.control.model import aliases as model_aliases
+from app.control.model.cooldown import blocked_models
 from app.control.model import registry as model_registry
 from app.control.model.spec import ModelSpec
 from app.control.account.quota_defaults import supports_mode
@@ -63,6 +64,7 @@ async def _resolve_model_for_request(model_name: str, request: Request | None = 
         model_name,
         available_pools=pools,
         is_available=_model_available_for_pools,
+        blocked_model_names=blocked_models(),
     )
 
 
@@ -367,6 +369,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
                 tool_choice=req.tool_choice,
                 temperature=req.temperature or 0.8,
                 top_p=req.top_p or 0.95,
+                model_fallbacks=model_aliases.fallback_candidates(resolved),
                 request_log_routing=request.state.request_log_routing,
             )
 

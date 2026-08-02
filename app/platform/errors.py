@@ -1,6 +1,9 @@
 """Platform-level exception hierarchy."""
 
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from time import time as wall_time
 
 
 class ErrorKind(StrEnum):
@@ -9,6 +12,27 @@ class ErrorKind(StrEnum):
     RATE_LIMIT      = "rate_limit_exceeded"
     UPSTREAM        = "upstream_error"
     SERVER          = "server_error"
+
+
+def parse_retry_after(value: object, *, now_s: float | None = None) -> float | None:
+    """Parse Retry-After seconds or an HTTP-date into non-negative seconds."""
+    if isinstance(value, bytes):
+        value = value.decode("ascii", "ignore")
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    current_time = wall_time() if now_s is None else now_s
+    return max(0.0, parsed.timestamp() - current_time)
 
 
 class AppError(Exception):
@@ -69,13 +93,18 @@ class UpstreamError(AppError):
         self,
         message: str,
         *,
-        status:  int = 502,
-        body:    str = "",
+        status: int = 502,
+        body: str = "",
+        retry_after_s: float | None = None,
     ) -> None:
+        details = {"body": body}
+        if retry_after_s is not None:
+            details["retry_after_s"] = retry_after_s
         super().__init__(
             message, kind=ErrorKind.UPSTREAM, code="upstream_error", status=status,
-            details={"body": body},
+            details=details,
         )
+        self.retry_after_s = retry_after_s
 
 
 class StreamIdleTimeout(AppError):
@@ -87,7 +116,7 @@ class StreamIdleTimeout(AppError):
 
 
 __all__ = [
-    "ErrorKind", "AppError",
+    "ErrorKind", "AppError", "parse_retry_after",
     "ValidationError", "AuthError", "RateLimitError",
     "UpstreamError", "StreamIdleTimeout",
 ]

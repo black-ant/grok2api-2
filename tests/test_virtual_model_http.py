@@ -69,6 +69,7 @@ class VirtualModelHttpTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.body.decode("utf-8").find("grok-4.3-console") >= 0, True)
         self.assertEqual(captured["model"], "grok-4.3-console")
+        self.assertEqual(captured["model_fallbacks"], ())
         self.assertEqual(request.state.request_log_routing["resolved_model"], "grok-4.3-console")
 
     async def test_streaming_upstream_429_returns_http_429_before_sse(self):
