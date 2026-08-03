@@ -210,6 +210,28 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(stats["models"][0]["requests"], 19)
         self.assertEqual(stats["models"][1]["requests"], 1)
         self.assertEqual(len(stats["recent"]), 20)
+
+    def test_routing_snapshot_tracks_pool_events_latest_fifty(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            for _ in range(55):
+                aliases.demote_model("grok-4.3-console")
+                aliases.promote_model("grok-4.3-console")
+            stats = aliases.routing_snapshot()["aliases"][0]
+
+        self.assertEqual(len(stats["pool_events"]), 50)
+        self.assertEqual(stats["pool_events"][0]["sequence"], 110)
+        self.assertEqual(stats["pool_events"][-1]["sequence"], 61)
+        self.assertEqual(stats["pool_events"][0]["action"], "promote")
+        self.assertEqual(stats["pool_events"][1]["action"], "demote")
+        self.assertEqual(stats["pool_events"][0]["from_pool"], "degraded")
+        self.assertEqual(stats["pool_events"][0]["to_pool"], "stable")
+
     def test_configured_default_models_exist(self):
         self.assertIsNotNone(registry.get("grok-4.3-console"))
         self.assertIsNotNone(registry.get("grok-4.20-0309-console"))

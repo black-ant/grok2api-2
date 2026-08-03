@@ -70,10 +70,13 @@ class _AliasRuntime:
     model_requests: dict[str, int] = field(default_factory=dict)
     model_last_used_at: dict[str, float] = field(default_factory=dict)
     recent_routes: list[dict[str, Any]] = field(default_factory=list)
+    pool_event_count: int = 0
+    pool_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 _ROUTING_LOCK = RLock()
 _RUNTIMES: dict[str, _AliasRuntime] = {}
+_MAX_POOL_EVENTS = 50
 
 
 def _as_model_list(value: object) -> list[str]:
@@ -314,6 +317,29 @@ def _record_selection(
         del runtime.recent_routes[:-30]
 
 
+def _record_pool_event(
+    runtime: _AliasRuntime,
+    *,
+    model_name: str,
+    action: str,
+    from_pool: str,
+    to_pool: str,
+) -> None:
+    runtime.pool_event_count += 1
+    runtime.pool_events.append(
+        {
+            "sequence": runtime.pool_event_count,
+            "model": model_name,
+            "action": action,
+            "from_pool": from_pool,
+            "to_pool": to_pool,
+            "at": time(),
+        }
+    )
+    if len(runtime.pool_events) > _MAX_POOL_EVENTS:
+        del runtime.pool_events[:-_MAX_POOL_EVENTS]
+
+
 def _select_virtual_candidate(
     alias_name: str,
     config: ModelPoolConfig,
@@ -504,9 +530,20 @@ def promote_model(model_name: str) -> None:
             runtime = _runtime_for(alias_name, config)
             if name not in config.degraded and name not in runtime.demoted:
                 continue
-            runtime.demoted.discard(name)
-            if name in config.degraded:
+            was_demoted = name in runtime.demoted
+            was_promoted = name in runtime.promoted
+            if was_demoted:
+                runtime.demoted.discard(name)
+            if name in config.degraded and not was_promoted:
                 runtime.promoted.add(name)
+            if was_demoted or (name in config.degraded and not was_promoted):
+                _record_pool_event(
+                    runtime,
+                    model_name=name,
+                    action="promote",
+                    from_pool="degraded",
+                    to_pool="stable",
+                )
 
 
 def demote_model(model_name: str) -> None:
@@ -521,9 +558,20 @@ def demote_model(model_name: str) -> None:
             if name not in config.stable and name not in config.degraded:
                 continue
             runtime = _runtime_for(alias_name, config)
-            runtime.promoted.discard(name)
-            if name in config.stable:
+            was_promoted = name in runtime.promoted
+            was_demoted = name in runtime.demoted
+            if was_promoted:
+                runtime.promoted.discard(name)
+            if name in config.stable and not was_demoted:
                 runtime.demoted.add(name)
+            if was_promoted or (name in config.stable and not was_demoted):
+                _record_pool_event(
+                    runtime,
+                    model_name=name,
+                    action="demote",
+                    from_pool="stable",
+                    to_pool="degraded",
+                )
 
 
 def reset_runtime_state() -> None:
@@ -600,6 +648,7 @@ def routing_snapshot() -> dict[str, Any]:
                     },
                     "models": models,
                     "recent": list(reversed(runtime.recent_routes)),
+                    "pool_events": list(reversed(runtime.pool_events)),
                 }
             )
     return {"generated_at": time(), "aliases": aliases}
