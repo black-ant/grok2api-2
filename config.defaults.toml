@@ -32,7 +32,7 @@ stream = true
 thinking = true
 # 聊天类 AUTO 模型在 auto 额度耗尽时，是否自动降级到 fast/expert
 auto_chat_mode_fallback = true
-# 虚拟模型收到上游 429 时，是否按映射顺序自动降级到下一个候选模型
+# 虚拟模型收到上游 429 时，是否允许跨模型池自动降级
 auto_model_fallback = true
 # 思考精简输出（false=完整原始推理过程，true=提炼结构化摘要）
 thinking_summary = false
@@ -45,14 +45,6 @@ enable_nsfw = true
 show_search_sources = false
 # 全局附加指令
 custom_instruction = ""
-
-
-# ==================== 模型映射 ====================
-[models.aliases]
-# 客户端只需要配置这两个虚拟模型名。服务端按顺序选择第一个可用真实模型。
-FREE = ["grok-4.3-console", "grok-4.20-0309-console"]
-SUPER = ["grok-4.20-auto", "grok-4.3-beta"]
-
 # 图片返回格式
 #   grok_url  — 直接返回 Grok CDN URL
 #   local_url — 下载后存本地，返回本地代理 URL
@@ -62,13 +54,20 @@ SUPER = ["grok-4.20-auto", "grok-4.3-beta"]
 image_format = "grok_url"
 # Imagine WebSocket 返回的 imagine-public 图片默认直返；开启后下载到本地并返回本地代理 URL
 imagine_public_image_proxy = false
-
 # 视频返回格式
 #   grok_url  — 直接返回 Grok CDN URL
 #   local_url — 下载后存本地，返回本地代理 URL
 #   grok_html — HTML <video> 标签，src 为 Grok CDN URL
 #   local_html — HTML <video> 标签，src 为本地代理 URL
 video_format = "grok_url"
+
+
+# ==================== 模型映射 ====================
+[models.aliases]
+# 客户端只需要配置这两个虚拟模型名。稳定池内轮询，降级池按 5% 低频探测。
+# 降级池模型调用成功后自动回到稳定池；稳定池模型触发限流后自动进入降级池。
+FREE = { stable = ["grok-4.3-console"], degraded = ["grok-4.20-0309-console"], stable_ratio = 95, degraded_ratio = 5 }
+SUPER = { stable = ["grok-4.20-auto"], degraded = ["grok-4.3-beta"], stable_ratio = 95, degraded_ratio = 5 }
 
 
 # ==================== 本地缓存 ====================

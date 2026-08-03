@@ -282,6 +282,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     }
     if resolved.is_virtual:
         request.state.request_log_routing["virtual_model"] = req.model
+        request.state.request_log_routing["model_pool"] = resolved.pool
     from app.platform.config.snapshot import get_config
 
     cfg = get_config()

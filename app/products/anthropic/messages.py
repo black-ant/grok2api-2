@@ -20,6 +20,7 @@ from app.platform.errors import RateLimitError, UpstreamError
 from app.platform.runtime.clock import now_s
 from app.platform.tokens import estimate_prompt_tokens, estimate_tokens, estimate_tool_call_tokens
 from app.control.model.enums import ModeId
+from app.control.model.cooldown import mark_model_success, mark_rate_limited, release_probe
 from app.control.model.registry import resolve as resolve_model
 from app.control.account.enums import FeedbackKind
 from app.dataplane.reverse.protocol.xai_chat import classify_line, StreamAdapter
@@ -34,6 +35,7 @@ from app.products.openai.chat import (
     _configured_retry_codes, _should_retry_upstream,
 )
 from app.products._account_selection import reserve_account, selection_max_retries
+from app.products._model_fallback import cooldown_seconds, jitter_ratio, max_cooldown_seconds
 from app.products.openai._tool_sieve import ToolSieve
 
 
@@ -684,6 +686,14 @@ async def create(
 
             except UpstreamError as exc:
                 fail_exc = exc
+                if exc.status == 429:
+                    mark_rate_limited(
+                        model,
+                        cooldown_seconds(cfg),
+                        max_cooldown_sec=max_cooldown_seconds(cfg),
+                        retry_after_sec=getattr(exc, "retry_after_s", None),
+                        jitter_ratio=jitter_ratio(cfg),
+                    )
                 if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
                     _retry = True
                     logger.warning(
@@ -705,6 +715,13 @@ async def create(
                 asyncio.create_task(_quota_sync(token, selected_mode_id)).add_done_callback(_log_task_exception)
             else:
                 asyncio.create_task(_fail_sync(token, selected_mode_id, fail_exc)).add_done_callback(_log_task_exception)
+            if success:
+                mark_model_success(model)
+            elif not (
+                isinstance(fail_exc, UpstreamError)
+                and fail_exc.status == 429
+            ):
+                release_probe(model)
 
         if success or not _retry:
             break

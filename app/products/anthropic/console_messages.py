@@ -16,6 +16,7 @@ from app.platform.tokens import estimate_prompt_tokens, estimate_tokens
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
 from app.control.account.runtime import get_refresh_service
+from app.control.model.cooldown import mark_model_success, mark_rate_limited, release_probe
 from app.control.model.registry import resolve as resolve_model
 from app.dataplane.account.selector import current_strategy
 from app.dataplane.reverse.protocol.xai_console_chat import (
@@ -24,6 +25,7 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
     stream_console_chat,
 )
 from app.products._account_selection import reserve_account, selection_max_retries
+from app.products._model_fallback import cooldown_seconds, jitter_ratio, max_cooldown_seconds
 from app.products.openai.chat import _configured_retry_codes, _should_retry_upstream
 
 
@@ -191,6 +193,14 @@ async def create(
 
                     except UpstreamError as exc:
                         fail_exc = exc
+                        if exc.status == 429:
+                            mark_rate_limited(
+                                model,
+                                cooldown_seconds(cfg),
+                                max_cooldown_sec=max_cooldown_seconds(cfg),
+                                retry_after_sec=getattr(exc, "retry_after_s", None),
+                                jitter_ratio=jitter_ratio(cfg),
+                            )
                         if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
                             _retry = True
                             logger.warning(
@@ -216,6 +226,13 @@ async def create(
                         asyncio.create_task(
                             _fail_sync(token, selected_mode_id, fail_exc)
                         ).add_done_callback(_log_task_exception)
+                    if success:
+                        mark_model_success(model)
+                    elif not (
+                        isinstance(fail_exc, UpstreamError)
+                        and fail_exc.status == 429
+                    ):
+                        release_probe(model)
 
                 if success or not _retry:
                     return
@@ -287,6 +304,14 @@ async def create(
 
             except UpstreamError as exc:
                 fail_exc = exc
+                if exc.status == 429:
+                    mark_rate_limited(
+                        model,
+                        cooldown_seconds(cfg),
+                        max_cooldown_sec=max_cooldown_seconds(cfg),
+                        retry_after_sec=getattr(exc, "retry_after_s", None),
+                        jitter_ratio=jitter_ratio(cfg),
+                    )
                 if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
                     logger.warning(
                         "console messages non-stream retry: attempt={}/{} status={}",
@@ -312,6 +337,13 @@ async def create(
                 asyncio.create_task(
                     _fail_sync(token, selected_mode_id, fail_exc)
                 ).add_done_callback(_log_task_exception)
+            if success:
+                mark_model_success(model)
+            elif not (
+                isinstance(fail_exc, UpstreamError)
+                and fail_exc.status == 429
+            ):
+                release_probe(model)
 
     raise RateLimitError("No available accounts after retries")
 

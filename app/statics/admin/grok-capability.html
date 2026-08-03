@@ -236,7 +236,7 @@ let batchRunning = false;
 let accountEmailFilter = '';
 let accountPoolFilter = '';
 const VIRTUAL_MODEL_ALIASES = ['FREE', 'SUPER'];
-let aliasCache = { FREE: [], SUPER: [] };
+let aliasCache = { FREE: { stable: [], degraded: [] }, SUPER: { stable: [], degraded: [] } };
 let aliasCacheLoaded = false;
 
 function esc(value) {
@@ -344,8 +344,14 @@ function normalizeAliases(value) {
   const source = value && typeof value === 'object' ? value : {};
   const result = {};
   VIRTUAL_MODEL_ALIASES.forEach((name) => {
-    const items = Array.isArray(source[name]) ? source[name] : [];
-    result[name] = [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))];
+    const entry = Array.isArray(source[name]) ? { stable: source[name] } : (source[name] || {});
+    const stable = [...new Set((Array.isArray(entry.stable) ? entry.stable : []).map((item) => String(item || '').trim()).filter(Boolean))];
+    result[name] = {
+      stable,
+      degraded: [...new Set((Array.isArray(entry.degraded) ? entry.degraded : []).map((item) => String(item || '').trim()).filter((item) => item && !stable.includes(item)))],
+      stable_ratio: Number.isFinite(Number(entry.stable_ratio)) ? Number(entry.stable_ratio) : 95,
+      degraded_ratio: Number.isFinite(Number(entry.degraded_ratio)) ? Number(entry.degraded_ratio) : 5,
+    };
   });
   return result;
 }
@@ -510,7 +516,8 @@ function batchResultText(item) {
 }
 
 function aliasHasModel(aliasName, modelId) {
-  return aliasCacheLoaded && (aliasCache[aliasName] || []).includes(modelId);
+  const pool = aliasCache[aliasName] || {};
+  return aliasCacheLoaded && [...(pool.stable || []), ...(pool.degraded || [])].includes(modelId);
 }
 
 function renderBatchResults() {
@@ -574,12 +581,15 @@ async function refreshAliasCache() {
 async function addModelToAlias(modelId, aliasName) {
   const payload = await apiFetch('/model-mapping');
   const aliases = normalizeAliases(payload?.data?.aliases);
-  if ((aliases[aliasName] || []).includes(modelId)) {
+  const pool = aliases[aliasName] || { stable: [], degraded: [] };
+  if ([...(pool.stable || []), ...(pool.degraded || [])].includes(modelId)) {
     aliasCache = aliases;
     aliasCacheLoaded = true;
     return 'exists';
   }
-  aliases[aliasName].push(modelId);
+  pool.stable = pool.stable || [];
+  pool.stable.push(modelId);
+  aliases[aliasName] = pool;
   await apiFetch('/model-mapping', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

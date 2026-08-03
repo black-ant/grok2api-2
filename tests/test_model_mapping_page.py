@@ -7,17 +7,36 @@ class ModelMappingPageTests(unittest.TestCase):
         html = Path("app/statics/admin/model-mapping.html").read_text(encoding="utf-8")
 
         self.assertIn("const VIRTUAL_MODELS = ['FREE', 'SUPER']", html)
+        self.assertIn("const POOLS = ['stable', 'degraded']", html)
+        self.assertIn("稳定池", html)
+        self.assertIn("降级池", html)
         self.assertIn("apiFetch('/model-mapping'", html)
         self.assertIn("body:JSON.stringify({ models:{ aliases } })", html)
         self.assertNotIn("<table", html.lower())
 
+    def test_model_routing_page_is_read_only_and_auto_refreshing(self):
+        html = Path("app/statics/admin/model-routing.html").read_text(encoding="utf-8")
+        router = Path("app/products/web/router.py").read_text(encoding="utf-8")
+        admin_api = Path("app/products/web/admin/__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn('data-active="/admin/model-routing"', html)
+        self.assertIn("apiFetch('/model-routing')", html)
+        self.assertIn("window.setInterval(loadRouting,2000)", html)
+        self.assertIn("最近实际路由", html)
+        self.assertIn("统计范围：当前进程", html)
+        self.assertNotIn("<form", html.lower())
+        self.assertNotIn("<table", html.lower())
+        self.assertIn('@router.get("/admin/model-routing"', router)
+        self.assertIn('@router.get("/model-routing"', admin_api)
     def test_admin_header_links_model_mapping_page(self):
         header = Path("app/statics/admin/header.html").read_text(encoding="utf-8")
         script = Path("app/statics/js/admin-header.js").read_text(encoding="utf-8")
 
         self.assertIn('/admin/model-mapping', header)
         self.assertIn('/admin/model-mapping', script)
-        self.assertIn('model-mapping-nav-1', script)
+        self.assertIn('/admin/model-routing', header)
+        self.assertIn('/admin/model-routing', script)
+        self.assertIn('model-routing-nav-1', script)
 
 
 if __name__ == "__main__":

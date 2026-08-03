@@ -510,7 +510,7 @@ async def completions(
     """Entry point for /v1/chat/completions.
 
     Returns an async generator for streaming, or a dict for non-streaming.
-    Supports account retries on configured HTTP status codes and ordered model
+    Supports account retries on configured HTTP status codes and pool-aware model
     fallback for virtual models after upstream 429 responses.
     """
     cfg = get_config()

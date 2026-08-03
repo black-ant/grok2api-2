@@ -75,6 +75,9 @@ def mark_rate_limited(
     if seconds <= 0 and retry_after <= 0:
         with _LOCK:
             _STATES.pop(name, None)
+        from .aliases import demote_model
+
+        demote_model(name)
         return 0.0
 
     configured_max = (
@@ -102,6 +105,9 @@ def mark_rate_limited(
         delay = max(local_delay, retry_after)
         state.cooldown_until = max(state.cooldown_until, now + delay)
         state.probe_in_flight = False
+        from .aliases import demote_model
+
+        demote_model(name)
         return delay
 
 
@@ -112,6 +118,9 @@ def mark_model_success(model_name: str) -> None:
         return
     with _LOCK:
         _STATES.pop(name, None)
+    from .aliases import promote_model
+
+    promote_model(name)
 
 
 def release_probe(model_name: str) -> None:
@@ -133,6 +142,9 @@ def clear_rate_limit(model_name: str) -> None:
 def reset_rate_limits() -> None:
     with _LOCK:
         _STATES.clear()
+    from .aliases import reset_runtime_state
+
+    reset_runtime_state()
 
 
 __all__ = [

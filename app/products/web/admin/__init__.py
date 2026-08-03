@@ -308,7 +308,7 @@ async def list_debug_chat_models():
 
 @router.get("/model-mapping", tags=[_TAG_ADMIN_SYSTEM])
 async def get_model_mapping():
-    aliases = model_aliases.alias_map()
+    aliases = model_aliases.alias_config_map()
     models = [
         {
             "id": spec.model_name,
@@ -335,6 +335,17 @@ async def get_model_mapping():
     )
 
 
+@router.get("/model-routing", tags=[_TAG_ADMIN_SYSTEM])
+async def get_model_routing():
+    return Response(
+        content=orjson.dumps({
+            "object": "model_routing",
+            "data": model_aliases.routing_snapshot(),
+        }),
+        media_type="application/json",
+    )
+
+
 @router.post("/model-mapping", tags=[_TAG_ADMIN_SYSTEM])
 async def update_model_mapping(req: ConfigPatchRequest):
     patch = req.root
@@ -342,21 +353,11 @@ async def update_model_mapping(req: ConfigPatchRequest):
     if not isinstance(aliases, dict):
         raise ValidationError("models.aliases must be an object", param="models.aliases")
 
-    normalized: dict[str, list[str]] = {}
-    for virtual_model, real_models in aliases.items():
-        name = str(virtual_model).strip()
-        if not name:
-            continue
-        if isinstance(real_models, list):
-            candidates = [str(item).strip() for item in real_models if str(item).strip()]
-        elif isinstance(real_models, str):
-            candidates = [item.strip() for item in real_models.split(",") if item.strip()]
-        else:
-            candidates = []
-        normalized[name] = candidates
+    normalized = model_aliases.normalize_alias_config(aliases)
 
     await config.update({"models": {"aliases": normalized}})
     await config.load()
+    model_aliases.reset_runtime_state()
     return {"status": "success", "message": "模型映射已更新"}
 
 

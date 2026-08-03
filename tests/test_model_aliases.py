@@ -2,10 +2,15 @@ import unittest
 from unittest.mock import patch
 
 from app.control.model import aliases
+from app.control.model.cooldown import mark_model_success, mark_rate_limited, reset_rate_limits
 from app.control.model import registry
 
 
 class ModelAliasesTests(unittest.TestCase):
+    def tearDown(self):
+        aliases.reset_runtime_state()
+        reset_rate_limits()
+
     def test_resolves_virtual_model_to_first_enabled_candidate(self):
         with patch.object(
             aliases,
@@ -87,6 +92,124 @@ class ModelAliasesTests(unittest.TestCase):
 
         self.assertIsNone(resolved)
 
+    def test_stable_pool_round_robins_and_degraded_pool_is_weighted(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console", "grok-4.3-low"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            first = [aliases.resolve("FREE") for _ in range(4)]
+            self.assertEqual(
+                [item.model for item in first],
+                ["grok-4.3-console", "grok-4.3-low", "grok-4.3-console", "grok-4.3-low"],
+            )
+
+            batch = [aliases.resolve("FREE") for _ in range(20)]
+
+        self.assertEqual(sum(item.pool == "degraded" for item in batch), 1)
+        degraded_index = next(index for index, item in enumerate(batch) if item.pool == "degraded")
+        self.assertEqual(batch[degraded_index].model, "grok-4.3-medium")
+
+    def test_successful_degraded_probe_is_promoted_to_stable(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            for _ in range(19):
+                aliases.resolve("FREE")
+            probe = aliases.resolve("FREE")
+            self.assertEqual(probe.pool, "degraded")
+
+            mark_model_success(probe.model)
+            first_after_promotion = aliases.resolve("FREE")
+            second_after_promotion = aliases.resolve("FREE")
+
+        self.assertEqual(first_after_promotion.pool, "stable")
+        self.assertEqual(second_after_promotion.model, "grok-4.3-medium")
+        self.assertEqual(second_after_promotion.pool, "stable")
+
+    def test_rate_limited_promoted_model_returns_to_degraded_pool(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            for _ in range(19):
+                aliases.resolve("FREE")
+            probe = aliases.resolve("FREE")
+            mark_model_success(probe.model)
+            mark_rate_limited(probe.model, 0)
+
+            for _ in range(19):
+                aliases.resolve("FREE")
+            recovered_probe = aliases.resolve("FREE")
+
+        self.assertEqual(recovered_probe.model, "grok-4.3-medium")
+        self.assertEqual(recovered_probe.pool, "degraded")
+
+    def test_successful_probe_restores_rate_limited_stable_model(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            mark_rate_limited("grok-4.3-console", 0)
+            probe = aliases.resolve("FREE")
+            self.assertEqual(probe.pool, "degraded")
+
+            mark_model_success("grok-4.3-console")
+            restored = aliases.resolve("FREE")
+
+        self.assertEqual(restored.model, "grok-4.3-console")
+        self.assertEqual(restored.pool, "stable")
+
+    def test_routing_snapshot_ignores_non_advancing_resolution(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            aliases.resolve("FREE", advance=False)
+            before = aliases.routing_snapshot()
+            aliases.resolve("FREE")
+            after = aliases.routing_snapshot()
+
+        self.assertEqual(before["aliases"][0]["stats"]["total"], 0)
+        self.assertEqual(after["aliases"][0]["stats"]["total"], 1)
+        self.assertEqual(after["aliases"][0]["stats"]["stable"], 1)
+        self.assertEqual(after["aliases"][0]["stats"]["degraded"], 0)
+        self.assertEqual(after["aliases"][0]["models"][0]["requests"], 1)
+        self.assertEqual(len(after["aliases"][0]["recent"]), 1)
+
+    def test_routing_snapshot_tracks_nineteen_to_one_pool_schedule(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.3-medium"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            for _ in range(20):
+                aliases.resolve("FREE")
+            stats = aliases.routing_snapshot()["aliases"][0]
+
+        self.assertEqual(stats["stats"]["total"], 20)
+        self.assertEqual(stats["stats"]["stable"], 19)
+        self.assertEqual(stats["stats"]["degraded"], 1)
+        self.assertEqual(stats["models"][0]["requests"], 19)
+        self.assertEqual(stats["models"][1]["requests"], 1)
+        self.assertEqual(len(stats["recent"]), 20)
     def test_configured_default_models_exist(self):
         self.assertIsNotNone(registry.get("grok-4.3-console"))
         self.assertIsNotNone(registry.get("grok-4.20-0309-console"))
