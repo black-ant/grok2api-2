@@ -365,6 +365,10 @@ def create_app() -> FastAPI:
             "description": "Video job creation and retrieval endpoints.",
         },
         {
+            "name": "OpenAI - Audio",
+            "description": "Console text-to-speech, speech-to-text, and voice endpoints.",
+        },
+        {
             "name": "OpenAI - Files",
             "description": "Locally cached media file endpoints.",
         },
@@ -494,6 +498,22 @@ def create_app() -> FastAPI:
     @app.get("/health", include_in_schema=False)
     def health():
         return {"status": "ok"}
+
+    @app.get("/healthz", tags=["System"])
+    def healthz():
+        return {"ok": True}
+
+    @app.get("/readyz", tags=["System"])
+    async def readyz():
+        repository = getattr(app.state, "repository", None)
+        if repository is None:
+            return JSONResponse({"ok": False}, status_code=503)
+        try:
+            await repository.runtime_snapshot()
+        except Exception as exc:
+            logger.debug("readiness check failed: error={}", exc)
+            return JSONResponse({"ok": False}, status_code=503)
+        return {"ok": True}
 
     return app
 

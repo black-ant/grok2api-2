@@ -27,7 +27,7 @@ class FlareSolverrClearanceProvider:
     ) -> ClearanceBundle | None:
         cfg = get_config()
         mode = ClearanceMode.parse(cfg.get_str("proxy.clearance.mode", "none"))
-        if mode != ClearanceMode.FLARESOLVERR:
+        if mode not in {ClearanceMode.FLARESOLVERR, ClearanceMode.ON_DEMAND}:
             return None
         fs_url      = cfg.get_str("proxy.clearance.flaresolverr_url", "")
         timeout_sec = cfg.get_int("proxy.clearance.timeout_sec", 60)

@@ -114,6 +114,7 @@ async def completions(
     messages: list[dict],
     stream: bool = True,
     emit_think: bool | None = None,
+    reasoning_effort: str | None = None,
     temperature: float = 0.7,
     top_p: float = 0.95,
     force_token: str | None = None,
@@ -125,7 +126,7 @@ async def completions(
     Returns an async generator for streaming, or a dict for non-streaming.
     """
     cfg = get_config()
-    effort = _reasoning_effort_from_emit_think(emit_think)
+    effort = reasoning_effort or _reasoning_effort_from_emit_think(emit_think)
     timeout_s = cfg.get_float("chat.timeout", 120.0)
     max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)

@@ -5,6 +5,7 @@ give feedback, and return results to the caller.
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind, ProxyScope, RequestKind
@@ -157,6 +158,8 @@ async def _delete_asset_inner(token: str, asset_id: str) -> dict:
 async def download_asset(
     token:     str,
     file_path: str,
+    *,
+    url_validator: Callable[[str], bool] | None = None,
 ) -> tuple[AsyncGenerator[bytes, None], Optional[str]]:
     """Stream asset bytes from assets.grok.com.
 
@@ -172,6 +175,8 @@ async def download_asset(
     timeout_s = cfg.get_float("asset.download_timeout", 120.0)
 
     url, origin, referer = resolve_download_url(file_path)
+    if url_validator is not None and not url_validator(url):
+        raise UpstreamError("Asset URL is not trusted", status=502)
     content_type = infer_content_type(url)
 
     if content_type and content_type.startswith("video/"):
@@ -205,6 +210,7 @@ async def download_asset(
             origin        = origin,
             referer       = referer,
             extra_headers = extra,
+            url_validator = url_validator,
         )
     except UpstreamError as exc:
         await proxy.feedback(

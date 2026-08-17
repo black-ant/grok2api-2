@@ -17,6 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.platform.logging.logger import logger
 from app.platform.paths import log_path
+from app.platform.usage_audit import audit_matches, build_audit_record, summarize_audits
 
 
 _DEFAULT_RETENTION_DAYS = 2
@@ -25,6 +26,22 @@ _DEFAULT_PATH_PREFIXES = ("/v1", "/webui/api", "/admin/api/debug/chat")
 _LOG_FILE_PREFIX = "request_"
 _LOG_FILE_SUFFIX = ".jsonl"
 
+_USAGE_METRIC_KEYS = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cache_read_input_tokens",
+        "cached_tokens",
+        "reasoning_tokens",
+        "prompt_tokens_details",
+        "completion_tokens_details",
+        "output_tokens_details",
+    }
+)
 _SENSITIVE_KEY_PARTS = (
     "authorization",
     "api_key",
@@ -58,6 +75,8 @@ def _env_prefixes() -> tuple[str, ...]:
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower().replace("-", "_")
+    if lowered in _USAGE_METRIC_KEYS:
+        return False
     return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
 
 
@@ -251,6 +270,63 @@ class RequestLogStore:
         start = max(0, offset)
         return items[start:start + limit]
 
+    def _read_all_locked(self) -> list[dict[str, Any]]:
+        self._cleanup_locked()
+        items: list[dict[str, Any]] = []
+        for log_date in self.retained_dates():
+            path = self._path_for_date(log_date)
+            if not path.exists():
+                continue
+            try:
+                with path.open("rb") as file:
+                    lines = list(file)
+            except FileNotFoundError:
+                continue
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    item = orjson.loads(line)
+                except orjson.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    items.append(item)
+        items.sort(key=lambda item: float(item.get("created_ts") or 0), reverse=True)
+        return items
+
+    def _read_audit_records_locked(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for item in self._read_all_locked():
+            audit = item.get("audit")
+            if isinstance(audit, dict):
+                records.append(audit)
+        return records
+
+    def _read_audit_page_locked(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        start_ts: float,
+        end_ts: float,
+        operation: str | None,
+        model: str | None,
+        status: int | None,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        records = [
+            record
+            for record in self._read_audit_records_locked()
+            if audit_matches(
+                record,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                operation=operation,
+                model=model,
+                status=status,
+            )
+        ]
+        return len(records), records[max(0, offset):max(0, offset) + limit]
+
     def _count_locked(self) -> int:
         self._cleanup_locked()
         count = 0
@@ -273,6 +349,46 @@ class RequestLogStore:
         async with self._lock:
             return await asyncio.to_thread(self._read_items_locked, limit=limit, offset=offset)
 
+    async def audit_page(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        start_ts: float,
+        end_ts: float,
+        operation: str | None = None,
+        model: str | None = None,
+        status: int | None = None,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._read_audit_page_locked,
+                limit=limit,
+                offset=offset,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                operation=operation,
+                model=model,
+                status=status,
+            )
+
+    async def audit_summary(
+        self,
+        *,
+        period: str,
+        operation: str | None = None,
+        model: str | None = None,
+        status: int | None = None,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            records = await asyncio.to_thread(self._read_audit_records_locked)
+        return summarize_audits(
+            records,
+            period=period,
+            operation=operation,
+            model=model,
+            status=status,
+        )
     async def count(self) -> int:
         async with self._lock:
             return await asyncio.to_thread(self._count_locked)
@@ -352,6 +468,9 @@ class RequestLogMiddleware:
             await self.app(scope, logging_receive, logging_send)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+            state = scope.setdefault("state", {})
+            if getattr(exc, "code", None):
+                state["request_log_error"] = str(exc.code)
             raise
         finally:
             duration_ms = round((time.perf_counter() - started_monotonic) * 1000, 2)
@@ -363,8 +482,35 @@ class RequestLogMiddleware:
             request_content_type = request_headers.get("content-type", "")
             response_content_type = response_headers.get("content-type", "")
             state = scope.get("state") or {}
+            request_payload = _body_payload(
+                bytes(request_body),
+                content_type=request_content_type,
+                total_bytes=request_bytes,
+                truncated=request_truncated,
+            )
+            response_payload = _body_payload(
+                bytes(response_body),
+                content_type=response_content_type,
+                total_bytes=response_bytes,
+                truncated=response_truncated,
+            )
+            request_id = uuid.uuid4().hex[:12]
+            routing = state.get("request_log_routing") or {}
+            audit = build_audit_record(
+                request_id=request_id,
+                created_ts=started_ts,
+                started_at=started_at,
+                path=path,
+                status_code=response_status,
+                duration_ms=duration_ms,
+                response_content_type=response_content_type,
+                response_body=response_payload.get("body"),
+                response_truncated=bool(response_payload.get("truncated")),
+                routing=routing,
+                state=state,
+            )
             entry = {
-                "id": uuid.uuid4().hex[:12],
+                "id": request_id,
                 "created_ts": started_ts,
                 "started_at": started_at,
                 "log_date": log_date,
@@ -375,26 +521,17 @@ class RequestLogMiddleware:
                 "client": client[0],
                 "status_code": response_status,
                 "duration_ms": duration_ms,
-                "routing": state.get("request_log_routing") or {},
+                "routing": routing,
+                "audit": audit,
                 "error": error,
                 "handler_error": state.get("request_log_error"),
                 "request": {
                     "headers": request_headers,
-                    **_body_payload(
-                        bytes(request_body),
-                        content_type=request_content_type,
-                        total_bytes=request_bytes,
-                        truncated=request_truncated,
-                    ),
+                    **request_payload,
                 },
                 "response": {
                     "headers": response_headers,
-                    **_body_payload(
-                        bytes(response_body),
-                        content_type=response_content_type,
-                        total_bytes=response_bytes,
-                        truncated=response_truncated,
-                    ),
+                    **response_payload,
                 },
             }
             try:

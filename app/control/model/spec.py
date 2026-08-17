@@ -20,6 +20,9 @@ class ModelSpec:
     ``public_name`` is the human-readable display name.
     ``prefer_best`` when True, reverses pool priority to try higher-tier
                     pools first (hard priority, not soft preference).
+    ``supported_in_api`` distinguishes a cataloged remote model from a model
+                          whose local request gateway is ready.
+    ``availability_note`` explains why a cataloged model is not yet callable.
     """
 
     model_name: str
@@ -29,6 +32,8 @@ class ModelSpec:
     enabled: bool
     public_name: str
     prefer_best: bool = False
+    supported_in_api: bool = True
+    availability_note: str | None = None
 
     # --- convenience predicates ---
 
@@ -46,6 +51,15 @@ class ModelSpec:
 
     def is_voice(self) -> bool:
         return bool(self.capability & Capability.VOICE)
+
+    def is_tts(self) -> bool:
+        return bool(self.capability & Capability.TTS)
+
+    def is_stt(self) -> bool:
+        return bool(self.capability & Capability.STT)
+
+    def is_realtime(self) -> bool:
+        return bool(self.capability & Capability.REALTIME)
 
     def is_console_chat(self) -> bool:
         """通过 console.x.ai/v1/responses 路由的模型。"""

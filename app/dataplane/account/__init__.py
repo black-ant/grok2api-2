@@ -18,7 +18,14 @@ from .lease import AccountLease, new_lease
 from .selector import current_strategy, select, select_any
 from .sync import bootstrap as _bootstrap, apply_changes
 from . import feedback as fb
-from ..shared.enums import POOL_ID_TO_STR, StatusId
+from ..shared.enums import (
+    IMAGE_QUOTA_MODE_IDS,
+    IMAGINE_QUOTA_MODE_IDS,
+    POOL_ID_TO_STR,
+    VIDEO_QUOTA_MODE_IDS,
+    PoolId,
+    StatusId,
+)
 
 if TYPE_CHECKING:
     pass
@@ -218,6 +225,57 @@ class AccountDirectory:
             selected_at=ts,
         )
 
+    async def reserve_image_edit(
+        self,
+        pool_candidates: tuple[int, ...] | int,
+        *,
+        exclude_tokens: list[str] | None = None,
+        prefer_tags: list[str] | None = None,
+        now_s_override: int | None = None,
+    ) -> AccountLease | None:
+        pools = (
+            (pool_candidates,) if isinstance(pool_candidates, int) else pool_candidates
+        )
+        for pool_id in pools:
+            mode_id = (
+                int(IMAGE_QUOTA_MODE_IDS[0])
+                if pool_id == int(PoolId.BASIC)
+                else int(IMAGE_QUOTA_MODE_IDS[1])
+            )
+            lease = await self.reserve(
+                pool_id,
+                mode_id,
+                exclude_tokens=exclude_tokens,
+                prefer_tags=prefer_tags,
+                now_s_override=now_s_override,
+            )
+            if lease is not None:
+                return lease
+        return None
+
+    async def reserve_video(
+        self,
+        pool_candidates: tuple[int, ...] | int,
+        *,
+        resolution_name: str | None = None,
+        exclude_tokens: list[str] | None = None,
+        prefer_tags: list[str] | None = None,
+        now_s_override: int | None = None,
+    ) -> AccountLease | None:
+        normalized_resolution = (resolution_name or '').strip().lower()
+        mode_id = (
+            int(VIDEO_QUOTA_MODE_IDS[1])
+            if normalized_resolution in ('', '720p')
+            else int(VIDEO_QUOTA_MODE_IDS[0])
+        )
+        return await self.reserve(
+            pool_candidates,
+            mode_id,
+            exclude_tokens=exclude_tokens,
+            prefer_tags=prefer_tags,
+            now_s_override=now_s_override,
+        )
+
     async def release(self, lease: AccountLease) -> None:
         """Decrement inflight counter for a finished request."""
         table = self._table
@@ -254,6 +312,18 @@ class AccountDirectory:
         strategy = current_strategy()
 
         async with self._lock:
+            if mode_id in IMAGINE_QUOTA_MODE_IDS:
+                if kind == FeedbackKind.SUCCESS:
+                    fb.apply_success_quota(table, idx, mode_id)
+                elif kind == FeedbackKind.RATE_LIMITED:
+                    fb.apply_rate_limited_quota(table, idx, mode_id)
+                    fb.update_last_fail(table, idx, ts)
+                elif kind == FeedbackKind.SERVER_ERROR:
+                    fb.apply_server_error(table, idx)
+                    fb.update_last_fail(table, idx, ts)
+                    return
+                if kind in (FeedbackKind.SUCCESS, FeedbackKind.RATE_LIMITED):
+                    return
             if kind == FeedbackKind.SUCCESS:
                 if strategy == "random":
                     fb.apply_success_random(table, idx)

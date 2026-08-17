@@ -13,8 +13,15 @@ from app.control.model.enums import ALL_MODES_FULL
 from .enums import AccountStatus, QuotaSource
 from .models import AccountRecord, QuotaWindow
 from .quota_defaults import (
+    IMAGE_EDIT_MODE_ID,
+    IMAGE_PRO_MODE_ID,
+    IMAGE_QUOTA_EXT_KEY,
+    IMAGINE_QUOTA_MODE_IDS,
+    IMAGE_VIDEO_720P_MODE_ID,
+    IMAGE_VIDEO_MODE_ID,
     default_quota_window,
     infer_pool,
+    image_quota_window,
     normalize_quota_window,
     supported_mode_ids,
     supports_mode,
@@ -53,6 +60,25 @@ _MODE_KEYS = {
     4: "quota_grok_4_3",
     5: "quota_console",  # console.x.ai 独立配额
 }
+
+_IMAGE_EXT_MODE_KEYS = {
+    IMAGE_PRO_MODE_ID: 'image_pro',
+    IMAGE_EDIT_MODE_ID: 'image_edit',
+    IMAGE_VIDEO_MODE_ID: 'video',
+    IMAGE_VIDEO_720P_MODE_ID: 'video_720p',
+}
+
+
+def _image_quota_ext_patch(record: AccountRecord, windows: dict[int, QuotaWindow]) -> dict:
+    group = dict((record.ext or {}).get(IMAGE_QUOTA_EXT_KEY) or {})
+    changed = False
+    for mode_id, mode_key in _IMAGE_EXT_MODE_KEYS.items():
+        window = windows.get(mode_id)
+        if window is None:
+            continue
+        group[mode_key] = window.to_dict()
+        changed = True
+    return {IMAGE_QUOTA_EXT_KEY: group} if changed else {}
 
 
 def _infer_pool_from_live_windows(windows: dict[int, QuotaWindow]) -> str | None:
@@ -104,7 +130,10 @@ class AccountRefreshService:
           - heavy -> auto / fast / expert / heavy / grok_4_3
         """
         try:
-            from app.dataplane.reverse.protocol.xai_usage import fetch_all_quotas
+            from app.dataplane.reverse.protocol.xai_usage import (
+                fetch_all_quotas,
+                fetch_imagine_quota_group,
+            )
 
             mode_ids = supported_mode_ids(pool)
             if bootstrap:
@@ -113,7 +142,13 @@ class AccountRefreshService:
                 # windows still provide enough signal to avoid a sticky
                 # misclassification.
                 mode_ids = tuple(dict.fromkeys((0, 2, 3, 4, *mode_ids)))
-            return await fetch_all_quotas(token, mode_ids)
+            windows = await fetch_all_quotas(token, mode_ids)
+            imagine_windows = await fetch_imagine_quota_group(token)
+            if windows is None:
+                return imagine_windows
+            if imagine_windows:
+                windows.update(imagine_windows)
+            return windows
         except UpstreamError:
             raise
         except Exception as exc:
@@ -137,6 +172,7 @@ class AccountRefreshService:
                 mode_id,
             )
             return None
+
         try:
             from app.dataplane.reverse.protocol.xai_usage import fetch_mode_quota
 
@@ -149,6 +185,23 @@ class AccountRefreshService:
                 token[:10],
                 pool,
                 mode_id,
+                exc,
+            )
+            return None
+
+    async def _fetch_imagine_quota(
+        self, token: str
+    ) -> dict[int, QuotaWindow] | None:
+        try:
+            from app.dataplane.reverse.protocol.xai_usage import fetch_imagine_quota_group
+
+            return await fetch_imagine_quota_group(token)
+        except UpstreamError:
+            raise
+        except Exception as exc:
+            logger.debug(
+                'account imagine quota fetch failed: token={}... error={}',
+                token[:10],
                 exc,
             )
             return None
@@ -179,6 +232,29 @@ class AccountRefreshService:
         """Fire-and-forget single-mode quota sync after a successful call."""
         record = (await self._repo.get_accounts([token]) or [None])[0]
         if record is None or record.is_deleted():
+            return
+
+        if mode_id in IMAGINE_QUOTA_MODE_IDS:
+            try:
+                windows = await self._fetch_imagine_quota(token)
+            except UpstreamError as exc:
+                if await self._expire_invalid_credentials(record, exc):
+                    return
+                raise
+            if windows:
+                await self._apply_image_quota_group(
+                    record,
+                    windows,
+                    is_use=True,
+                    use_at_ms=now_ms(),
+                )
+            else:
+                await self._apply_image_quota_fallback(
+                    record,
+                    mode_id,
+                    is_use=True,
+                    use_at_ms=now_ms(),
+                )
             return
 
         # mode_id=5 (CONSOLE) 是本地管理的配额，不需要请求 xai usage API
@@ -337,7 +413,11 @@ class AccountRefreshService:
                         source=QuotaSource.DEFAULT,
                     ).to_dict()
 
-        if not patches:
+        ext_patch = _image_quota_ext_patch(record, windows)
+        if ext_patch:
+            refreshed = True
+
+        if not patches and not ext_patch:
             return RefreshResult(checked=1, failed=0 if refreshed else 1)
 
         # Infer pool type from live quota data and patch if it changed.
@@ -359,6 +439,7 @@ class AccountRefreshService:
                     pool=pool_patch,
                     last_sync_at=now_ms() if refreshed else None,
                     usage_sync_delta=1 if refreshed else None,
+                    ext_merge=ext_patch or None,
                     **patches,  # type: ignore[arg-type]
                 )
             ]
@@ -425,6 +506,39 @@ class AccountRefreshService:
                 if record is not None and await self._expire_invalid_credentials(
                     record, exc
                 ):
+                    return
+                if (
+                    record is not None
+                    and getattr(exc, 'status', None) == 429
+                    and mode_id in IMAGINE_QUOTA_MODE_IDS
+                ):
+                    now = now_ms()
+                    mode_key = _IMAGE_EXT_MODE_KEYS[mode_id]
+                    window = image_quota_window(record.ext, mode_key)
+                    reset_at = window.reset_at
+                    if reset_at is None:
+                        reset_at = now + max(window.window_seconds, 1) * 1000
+                    image_window = QuotaWindow(
+                        remaining=0,
+                        total=window.total,
+                        window_seconds=window.window_seconds,
+                        reset_at=reset_at,
+                        synced_at=window.synced_at,
+                        source=QuotaSource.ESTIMATED,
+                    )
+                    await self._repo.patch_accounts(
+                        [
+                            AccountPatch(
+                                token=token,
+                                usage_fail_delta=1,
+                                last_fail_at=now,
+                                last_fail_reason='rate_limited',
+                                ext_merge=_image_quota_ext_patch(
+                                    record, {mode_id: image_window}
+                                ),
+                            )
+                        ]
+                    )
                     return
                 if (
                     record is not None
@@ -522,6 +636,71 @@ class AccountRefreshService:
                 token[:10],
                 exc,
             )
+
+    async def _apply_image_quota_group(
+        self,
+        record: AccountRecord,
+        windows: dict[int, QuotaWindow],
+        *,
+        is_use: bool = False,
+        use_at_ms: int | None = None,
+    ) -> None:
+        from .commands import AccountPatch
+
+        ext_patch = _image_quota_ext_patch(record, windows)
+        if not ext_patch and not is_use:
+            return
+        await self._repo.patch_accounts(
+            [
+                AccountPatch(
+                    token=record.token,
+                    ext_merge=ext_patch or None,
+                    last_sync_at=now_ms() if ext_patch else None,
+                    usage_sync_delta=1 if ext_patch else None,
+                    usage_use_delta=1 if is_use else None,
+                    last_use_at=use_at_ms if is_use else None,
+                )
+            ]
+        )
+
+    async def _apply_image_quota_fallback(
+        self,
+        record: AccountRecord,
+        mode_id: int,
+        *,
+        is_use: bool = False,
+        use_at_ms: int | None = None,
+    ) -> None:
+        from .commands import AccountPatch
+
+        mode_key = _IMAGE_EXT_MODE_KEYS.get(mode_id)
+        ext_patch: dict = {}
+        if mode_key is not None:
+            window = image_quota_window(record.ext, mode_key)
+            if window.remaining >= 0:
+                ext_patch = _image_quota_ext_patch(
+                    record,
+                    {
+                        mode_id: QuotaWindow(
+                            remaining=max(0, window.remaining - 1),
+                            total=window.total,
+                            window_seconds=window.window_seconds,
+                            reset_at=window.reset_at,
+                            synced_at=window.synced_at,
+                            source=QuotaSource.ESTIMATED,
+                        )
+                    },
+                )
+        await self._repo.patch_accounts(
+            [
+                AccountPatch(
+                    token=record.token,
+                    ext_merge=ext_patch or None,
+                    usage_use_delta=1 if is_use else None,
+                    last_use_at=use_at_ms if is_use else None,
+                )
+            ]
+        )
 
     async def _apply_single_mode(
         self,

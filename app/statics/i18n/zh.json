@@ -389,7 +389,8 @@
         "clearanceMode": {
           "none": "关闭",
           "manual": "手动",
-          "flaresolverr": "FlareSolverr"
+          "flaresolverr": "FlareSolverr",
+          "onDemand": "按需刷新"
         }
       },
       "fields": {

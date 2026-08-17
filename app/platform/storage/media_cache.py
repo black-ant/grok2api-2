@@ -26,6 +26,14 @@ _LOW_WATERMARK_RATIO = 0.60
 _TABLE = "local_media_files"
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
 _VIDEO_EXTS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"})
+_VIDEO_MIME_EXTS = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "video/x-m4v": ".m4v",
+    "video/x-msvideo": ".avi",
+    "video/x-matroska": ".mkv",
+}
 
 
 class LocalMediaCacheStore:
@@ -46,9 +54,16 @@ class LocalMediaCacheStore:
         self._save("image", file_id=file_id, raw=raw, suffix=ext)
         return file_id
 
-    def save_video(self, raw: bytes, file_id: str) -> Path:
+    def save_video(
+        self,
+        raw: bytes,
+        file_id: str,
+        mime: str = "video/mp4",
+    ) -> Path:
         """Persist a video and return the final file path."""
-        return self._save("video", file_id=file_id, raw=raw, suffix=".mp4")
+        media_type = (mime or "video/mp4").split(";", 1)[0].strip().lower()
+        suffix = _VIDEO_MIME_EXTS.get(media_type, ".mp4")
+        return self._save("video", file_id=file_id, raw=raw, suffix=suffix)
 
     def reconcile(self, media_type: MediaType) -> None:
         """Rebuild the on-disk index for one media type and enforce limits."""
@@ -464,9 +479,13 @@ def save_local_image(raw: bytes, mime: str, file_id: str) -> str:
     return local_media_cache.save_image(raw, mime, file_id)
 
 
-def save_local_video(raw: bytes, file_id: str) -> Path:
+def save_local_video(
+    raw: bytes,
+    file_id: str,
+    mime: str = "video/mp4",
+) -> Path:
     """Persist a video to local cache and return the file path."""
-    return local_media_cache.save_video(raw, file_id)
+    return local_media_cache.save_video(raw, file_id, mime)
 
 
 def clear_local_media_files(media_type: MediaType) -> int:

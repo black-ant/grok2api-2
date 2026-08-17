@@ -14,6 +14,10 @@ class ModeId(IntEnum):
     HEAVY = 3
     GROK_4_3 = 4
     CONSOLE = 5  # console.x.ai 独立配额
+    IMAGE_PRO = 6  # Web Imagine imagePro quota fence
+    IMAGE_EDIT = 7  # Web Imagine imageEdit quota fence
+    VIDEO = 8  # Web Imagine video quota fence
+    VIDEO_720P = 9  # Web Imagine video720p quota fence
 
 
 class PoolId(IntEnum):
@@ -53,7 +57,23 @@ ALL_MODE_IDS: tuple[int, ...] = (
     int(ModeId.HEAVY),
     int(ModeId.GROK_4_3),
     int(ModeId.CONSOLE),
+    int(ModeId.IMAGE_PRO),
+    int(ModeId.IMAGE_EDIT),
+    int(ModeId.VIDEO),
+    int(ModeId.VIDEO_720P),
 )
+
+IMAGE_QUOTA_MODE_IDS: tuple[int, ...] = (
+    int(ModeId.IMAGE_PRO),
+    int(ModeId.IMAGE_EDIT),
+)
+
+VIDEO_QUOTA_MODE_IDS: tuple[int, ...] = (
+    int(ModeId.VIDEO),
+    int(ModeId.VIDEO_720P),
+)
+
+IMAGINE_QUOTA_MODE_IDS: tuple[int, ...] = IMAGE_QUOTA_MODE_IDS + VIDEO_QUOTA_MODE_IDS
 
 __all__ = [
     "ModeId",
@@ -63,4 +83,7 @@ __all__ = [
     "POOL_ID_TO_STR",
     "STATUS_STR_TO_ID",
     "ALL_MODE_IDS",
+    "IMAGE_QUOTA_MODE_IDS",
+    "IMAGINE_QUOTA_MODE_IDS",
+    "VIDEO_QUOTA_MODE_IDS",
 ]

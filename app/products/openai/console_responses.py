@@ -8,9 +8,7 @@
 """
 
 import asyncio
-from typing import Any, AsyncGenerator
-
-import orjson
+from typing import AsyncGenerator
 
 from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
@@ -30,7 +28,6 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
 from app.products._account_selection import reserve_account, selection_max_retries
 from app.products.openai.chat import _configured_retry_codes, _should_retry_upstream
 from ._format import (
-    make_resp_id,
     make_resp_object,
     build_resp_usage,
     format_sse,
@@ -90,6 +87,7 @@ async def create(
     response_id: str,
     reasoning_id: str,
     message_id: str,
+    reasoning_effort: str | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Console models /v1/responses handler."""
 
@@ -100,7 +98,7 @@ async def create(
     retry_codes = _configured_retry_codes(cfg)
 
     # reasoning effort 映射
-    effort = "low" if emit_think else "none"
+    effort = reasoning_effort or ("low" if emit_think else "none")
 
     from app.dataplane.account import _directory as _acct_dir
     if _acct_dir is None:

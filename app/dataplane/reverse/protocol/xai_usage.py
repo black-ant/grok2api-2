@@ -1,12 +1,20 @@
 """XAI rate-limits API protocol — fetch live quota data per mode."""
 
 import asyncio
+from datetime import datetime, timezone
 
 import orjson
 
 from app.platform.errors import UpstreamError
 from app.platform.logging.logger import logger
 from app.platform.runtime.clock import now_ms
+from app.control.account.quota_defaults import (
+    IMAGE_EDIT_MODE_ID,
+    IMAGE_PRO_MODE_ID,
+    IMAGE_VIDEO_720P_MODE_ID,
+    IMAGE_VIDEO_MODE_ID,
+    IMAGE_QUOTA_WINDOW_SECONDS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +39,14 @@ _DEFAULT_WINDOW_SECS: dict[int, int] = {
     3: 7_200,  # heavy  — 2 h  (heavy-pool only)
     4: 7_200,  # grok_4_3 — 2 h  (super/heavy only)
 }
+
+_IMAGINE_QUOTA_FIELDS: tuple[tuple[str, int | None], ...] = (
+    ('image', None),
+    ('imagePro', IMAGE_PRO_MODE_ID),
+    ('imageEdit', IMAGE_EDIT_MODE_ID),
+    ('video', IMAGE_VIDEO_MODE_ID),
+    ('video720p', IMAGE_VIDEO_720P_MODE_ID),
+)
 
 
 def _build_payload(mode_name: str) -> bytes:
@@ -71,6 +87,83 @@ def parse_rate_limits(
         "total": int(total) if total is not None else int(remaining),
         "window_seconds": int(window_secs) if window_secs else default_window_seconds,
     }
+
+
+# ---------------------------------------------------------------------------
+# Imagine quota group parser
+# ---------------------------------------------------------------------------
+
+
+def _parse_imagine_reset_at(value: object, synced_at: int, window_seconds: int, remaining: int, available: bool) -> int | None:
+    if value:
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                text = value.strip().replace('Z', '+00:00')
+                parsed = datetime.fromisoformat(text)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return int(parsed.timestamp() * 1000)
+            except ValueError:
+                return None
+    if not available or remaining <= 0:
+        return synced_at + window_seconds * 1000
+    return None
+
+
+def parse_imagine_quota(body: dict, *, synced_at: int | None = None) -> dict[int, object] | None:
+    if not isinstance(body, dict):
+        return None
+    synced = synced_at if synced_at is not None else now_ms()
+    windows: dict[int, object] = {}
+    for field, mode_id in _IMAGINE_QUOTA_FIELDS:
+        if field not in body:
+            return None
+        product = body[field]
+        if product is None:
+            continue
+        if not isinstance(product, dict):
+            return None
+        available = product.get('available')
+        if not isinstance(available, bool):
+            return None
+        if mode_id is None:
+            continue
+        remaining_raw = product.get('remainingQueries')
+        window_raw = product.get('windowSizeSeconds')
+        if available and (remaining_raw is None or window_raw is None):
+            return None
+        try:
+            remaining = max(0, int(remaining_raw)) if remaining_raw is not None else 0
+            window_seconds = (
+                int(window_raw)
+                if window_raw is not None
+                else IMAGE_QUOTA_WINDOW_SECONDS
+            )
+        except (TypeError, ValueError):
+            return None
+        if window_seconds <= 0:
+            return None
+        reset_at = _parse_imagine_reset_at(
+            product.get('nextAvailableAt'),
+            synced,
+            window_seconds,
+            remaining,
+            available,
+        )
+        from app.control.account.enums import QuotaSource
+        from app.control.account.models import QuotaWindow
+
+        windows[mode_id] = QuotaWindow(
+            remaining=remaining,
+            total=0,
+            window_seconds=window_seconds,
+            reset_at=reset_at,
+            synced_at=synced,
+            source=QuotaSource.REAL,
+        )
+    return windows
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +213,33 @@ async def _do_fetch(token: str, mode_name: str) -> dict:
         return body
     except Exception as exc:
         status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+        kind = _proxy_feedback_kind_for_error(exc, status=status)
+        await proxy.feedback(lease, ProxyFeedback(kind=kind, status_code=status))
+        raise
+
+
+async def _do_fetch_imagine_quota(token: str) -> dict:
+    from app.dataplane.reverse.transport.http import post_json
+    from app.dataplane.proxy import get_proxy_runtime
+    from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind
+
+    proxy = await get_proxy_runtime()
+    lease = await proxy.acquire()
+    try:
+        body = await post_json(
+            'https://grok.com/rest/media/imagine/quota_info',
+            token,
+            b'{}',
+            lease=lease,
+            timeout_s=20.0,
+            referer='https://grok.com/imagine',
+        )
+        await proxy.feedback(
+            lease, ProxyFeedback(kind=ProxyFeedbackKind.SUCCESS, status_code=200)
+        )
+        return body
+    except Exception as exc:
+        status = getattr(exc, 'status', None) or getattr(exc, 'status_code', None)
         kind = _proxy_feedback_kind_for_error(exc, status=status)
         await proxy.feedback(lease, ProxyFeedback(kind=kind, status_code=status))
         raise
@@ -198,6 +318,22 @@ async def fetch_mode_quota(token: str, mode_id: int) -> object | None:
     return await _fetch_one(token, mode_id)
 
 
+async def fetch_imagine_quota_group(token: str) -> dict[int, object] | None:
+    try:
+        body = await asyncio.wait_for(_do_fetch_imagine_quota(token), timeout=25.0)
+    except asyncio.TimeoutError:
+        logger.debug('imagine quota fetch timed out: token={}...', token[:10])
+        return None
+    except Exception as exc:
+        if is_invalid_credentials_error(exc):
+            raise
+        logger.debug(
+            'imagine quota fetch failed: token={}... error={}', token[:10], exc
+        )
+        return None
+    return parse_imagine_quota(body)
+
+
 def is_invalid_credentials_body(body: str) -> bool:
     """Return whether *body* contains a Grok invalid/blocked account marker."""
     text = str(body or "").lower()
@@ -252,4 +388,6 @@ __all__ = [
     "fetch_mode_quota",
     "is_invalid_credentials_body",
     "is_invalid_credentials_error",
+    'parse_imagine_quota',
+    'fetch_imagine_quota_group',
 ]

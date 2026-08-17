@@ -8,6 +8,7 @@ Supports:
 import asyncio
 import hashlib
 import html
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from app.platform.runtime.clock import now_s
 from app.platform.storage import save_local_video
 from app.control.account.enums import FeedbackKind
 from app.control.model import aliases as model_aliases
+from app.control.model.enums import ModeId
 from app.control.model.registry import resolve as resolve_model
 from app.dataplane.proxy import get_proxy_runtime
 from app.dataplane.proxy.adapters.headers import build_http_headers
@@ -61,6 +63,9 @@ _VIDEO_QUALITY = "standard"
 _VIDEO_OBJECT = "video"
 _VIDEO_JOB_TTL_S = 3600
 _VIDEO_EXTENSION_REF_TYPE = "ORIGINAL_REF_TYPE_VIDEO_EXTENSION"
+_VIDEO_IDEMPOTENCY_MAX_LENGTH = 128
+_VIDEO_RETRYABLE_STATUSES = frozenset({401, 403, 408, 425, 429, 500, 502, 503, 504})
+_TRUSTED_VIDEO_HOST_SUFFIXES = (".grok.com", ".vidgen.x.ai")
 _SUPPORTED_VIDEO_LENGTHS = frozenset({6, 10, 12, 16, 20})
 _VIDEO_SIZE_MAP: dict[str, tuple[str, str]] = {
     "720x1280": ("9:16", "720p"),
@@ -132,7 +137,95 @@ class _VideoJob:
 
 
 _VIDEO_JOBS: dict[str, _VideoJob] = {}
+_VIDEO_IDEMPOTENCY: dict[str, tuple[str, str]] = {}
 _VIDEO_JOBS_LOCK = asyncio.Lock()
+
+
+def _normalize_idempotency_key(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    if len(normalized) > _VIDEO_IDEMPOTENCY_MAX_LENGTH:
+        raise ValidationError(
+            f"Idempotency-Key must be at most {_VIDEO_IDEMPOTENCY_MAX_LENGTH} characters",
+            param="Idempotency-Key",
+        )
+    return normalized
+
+
+def _video_request_signature(
+    *,
+    model: str,
+    prompt: str,
+    seconds: int,
+    size: str,
+    resolution_name: str | None,
+    preset: str | None,
+    input_references: list[dict[str, Any]] | None,
+) -> str:
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "seconds": seconds,
+        "size": size,
+        "resolution_name": resolution_name,
+        "preset": preset,
+        "input_references": input_references or [],
+    }
+    return hashlib.sha256(
+        orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
+    ).hexdigest()
+
+
+def _is_safe_video_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and bool(host)
+        and not parsed.username
+        and not parsed.password
+        and (host == "grok.com" or any(host.endswith(suffix) for suffix in _TRUSTED_VIDEO_HOST_SUFFIXES))
+    )
+
+
+def _video_content_type(raw: bytes, content_type: str | None) -> str:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized.startswith("video/"):
+        return normalized
+    if raw[:1] in {b"<", b"{"}:
+        return normalized
+    if len(raw) >= 8 and raw[4:8] == b"ftyp":
+        return "video/mp4"
+    if raw.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    return "video/mp4"
+
+
+def _safe_video_filename(file_id: str, content_type: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", str(file_id or "")).strip("._-") or "video"
+    media_type = (content_type or "video/mp4").split(";", 1)[0].strip().lower()
+    extension = {
+        "video/mp4": ".mp4",
+        "video/webm": ".webm",
+        "video/quicktime": ".mov",
+        "video/x-m4v": ".m4v",
+        "video/x-msvideo": ".avi",
+        "video/x-matroska": ".mkv",
+    }.get(media_type, ".mp4")
+    return f"{safe_id}{extension}"
+
+
+def _is_video_retryable(exc: BaseException) -> bool:
+    return isinstance(exc, UpstreamError) and exc.status in _VIDEO_RETRYABLE_STATUSES
+
+
+def _video_attempt_limit() -> int:
+    configured = get_config().get_int("video.max_attempts", 3)
+    return max(1, min(10, configured))
 
 
 def _build_message(prompt: str, preset: str) -> str:
@@ -357,7 +450,7 @@ async def _stream_video_request(
 
 def _absolutize_video_url(url: str) -> str:
     full_url, _, _ = resolve_download_url(url)
-    return full_url
+    return full_url if _is_safe_video_url(full_url) else ""
 
 
 def _is_upstream_asset_content_url(value: str) -> bool:
@@ -395,7 +488,9 @@ async def _prepare_video_reference(
     else:
         try:
             uploaded_file_id, uploaded_file_uri = await upload_from_input(
-                token, image_input
+                token,
+                image_input,
+                allowed_mime_prefixes=("image/",),
             )
             content_url = resolve_uploaded_asset_reference(
                 token, uploaded_file_id, uploaded_file_uri
@@ -541,7 +636,8 @@ async def _collect_video_segment(
             final_asset_id = attachments[0]
 
     if not final_url and final_asset_id:
-        final_url = resolve_asset_reference(final_asset_id, "", user_id=None) or ""
+        candidate = resolve_asset_reference(final_asset_id, "", user_id=None) or ""
+        final_url = candidate if _is_safe_video_url(candidate) else ""
 
     if not final_url and final_asset_id:
         raise UpstreamError(
@@ -563,8 +659,10 @@ async def _collect_video_segment(
 
 
 async def _download_video_bytes(token: str, url: str) -> tuple[bytes, str]:
+    if not _is_safe_video_url(url):
+        raise UpstreamError("Video output URL is not a trusted Grok asset URL", status=502)
     try:
-        stream, content_type = await download_asset(token, url)
+        stream, content_type = await download_asset(token, url, url_validator=_is_safe_video_url)
         chunks: list[bytes] = []
         async for chunk in stream:
             chunks.append(chunk)
@@ -577,11 +675,14 @@ async def _download_video_bytes(token: str, url: str) -> tuple[bytes, str]:
         raise UpstreamError("Video download returned empty content", status=502)
     if raw.lstrip()[:1] in {b"<", b"{"}:
         raise UpstreamError("Video download returned non-video content", status=502)
-    return raw, (content_type or "video/mp4")
+    normalized_type = _video_content_type(raw, content_type)
+    if content_type and not normalized_type.startswith("video/"):
+        raise UpstreamError("Video download returned non-video content", status=502)
+    return raw, normalized_type
 
 
-def _save_video_bytes(raw: bytes, file_id: str) -> Path:
-    return save_local_video(raw, file_id)
+def _save_video_bytes(raw: bytes, file_id: str, mime: str = "video/mp4") -> Path:
+    return save_local_video(raw, file_id, mime)
 
 
 def _local_video_url(file_id: str) -> str:
@@ -609,6 +710,8 @@ def _render_video_html(url: str) -> str:
 
 
 async def _resolve_video_output(*, token: str, url: str, file_id: str) -> str:
+    if not _is_safe_video_url(url):
+        raise UpstreamError("Video output URL is not a trusted Grok asset URL", status=502)
     fmt = _normalize_video_format(
         get_config().get_str("features.video_format", "grok_url")
     )
@@ -618,8 +721,8 @@ async def _resolve_video_output(*, token: str, url: str, file_id: str) -> str:
         return _render_video_html(url)
 
     try:
-        raw, _mime = await _download_video_bytes(token, url)
-        await asyncio.to_thread(_save_video_bytes, raw, file_id)
+        raw, mime = await _download_video_bytes(token, url)
+        await asyncio.to_thread(_save_video_bytes, raw, file_id, mime)
     except Exception as exc:
         logger.debug("video download fallback_to=upstream_url error={}", exc)
         return url if fmt == "local_url" else _render_video_html(url)
@@ -740,12 +843,17 @@ async def _run_video_generation(
             progress_cb=progress_cb,
         )
 
-    return await _run_video_with_account(model=model, runner=_runner)
+    return await _run_video_with_account(
+        model=model,
+        resolution_name=resolution_name,
+        runner=_runner,
+    )
 
 
 async def _run_video_with_account(
     *,
     model: str,
+    resolution_name: str,
     runner: Callable[[str, float], Awaitable[Any]],
 ) -> Any:
     cfg = get_config()
@@ -762,15 +870,16 @@ async def _run_video_with_account(
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
 
-    acct = await _acct_dir.reserve(
+    acct = await _acct_dir.reserve_video(
         pool_candidates=spec.pool_candidates(),
-        mode_id=int(spec.mode_id),
+        resolution_name=resolution_name,
         now_s_override=now_s(),
     )
     if acct is None:
         raise RateLimitError("No available accounts for video generation")
 
     token = acct.token
+    selected_mode_id = acct.mode_id
     success = False
     fail_exc: BaseException | None = None
     try:
@@ -789,16 +898,37 @@ async def _run_video_with_account(
             if fail_exc
             else FeedbackKind.SERVER_ERROR
         )
-        await _acct_dir.feedback(token, kind, int(spec.mode_id))
+        await _acct_dir.feedback(token, kind, selected_mode_id)
         if success:
-            asyncio.create_task(_quota_sync(token, int(spec.mode_id)))
+            asyncio.create_task(_quota_sync(token, selected_mode_id))
         else:
-            asyncio.create_task(_fail_sync(token, int(spec.mode_id), fail_exc))
+            asyncio.create_task(_fail_sync(token, selected_mode_id, fail_exc))
 
 
-async def _put_video_job(job: _VideoJob) -> None:
+async def _put_video_job(
+    job: _VideoJob,
+    *,
+    idempotency_key: str | None = None,
+    request_signature: str = "",
+) -> _VideoJob | None:
     async with _VIDEO_JOBS_LOCK:
+        if idempotency_key:
+            previous = _VIDEO_IDEMPOTENCY.get(idempotency_key)
+            if previous:
+                previous_signature, previous_job_id = previous
+                previous_job = _VIDEO_JOBS.get(previous_job_id)
+                if previous_job is not None:
+                    if previous_signature != request_signature:
+                        raise ValidationError(
+                            "Idempotency-Key was already used with a different video request",
+                            param="Idempotency-Key",
+                        )
+                    return previous_job
+                _VIDEO_IDEMPOTENCY.pop(idempotency_key, None)
         _VIDEO_JOBS[job.id] = job
+        if idempotency_key:
+            _VIDEO_IDEMPOTENCY[idempotency_key] = (request_signature, job.id)
+    return None
 
 
 async def get_video_job(video_id: str) -> _VideoJob | None:
@@ -810,6 +940,9 @@ async def _expire_video_job(video_id: str, ttl_s: int = _VIDEO_JOB_TTL_S) -> Non
     await asyncio.sleep(ttl_s)
     async with _VIDEO_JOBS_LOCK:
         _VIDEO_JOBS.pop(video_id, None)
+        for key, (_, job_id) in list(_VIDEO_IDEMPOTENCY.items()):
+            if job_id == video_id:
+                _VIDEO_IDEMPOTENCY.pop(key, None)
 
 
 async def _set_job_status(
@@ -837,71 +970,130 @@ async def _run_video_job(
 ) -> None:
     try:
         await _set_job_status(job, status="in_progress", progress=1)
+        spec = resolve_model(job.model)
         aspect_ratio, default_resolution_name = _resolve_video_size(size)
         resolved_resolution_name = _resolve_video_resolution_name(
             resolution_name,
             default=default_resolution_name,
         )
         resolved_preset = _resolve_video_preset(preset)
-        spec = resolve_model(job.model)
 
         from app.dataplane.account import _directory as _acct_dir
 
         if _acct_dir is None:
             raise RateLimitError("Account directory not initialised")
 
-        acct = await _acct_dir.reserve(
-            pool_candidates=spec.pool_candidates(),
-            mode_id=int(spec.mode_id),
-            now_s_override=now_s(),
-        )
-        if acct is None:
-            raise RateLimitError("No available accounts for video generation")
+        excluded_tokens: list[str] = []
+        artifact: _VideoArtifact | None = None
+        raw = b""
+        mime = "video/mp4"
+        last_error: BaseException | None = None
+        max_attempts = _video_attempt_limit()
 
-        token = acct.token
-        success = False
-        fail_exc: BaseException | None = None
-        try:
-            cfg = get_config()
-            timeout_s = cfg.get_float("video.timeout", 180.0)
-
-            async def _progress(progress: int) -> None:
-                await _set_job_status(
-                    job, status="in_progress", progress=max(1, progress)
+        for attempt in range(max_attempts):
+            if spec.mode_id == ModeId.CONSOLE:
+                acct = await _acct_dir.reserve(
+                    pool_candidates=spec.pool_candidates(),
+                    mode_id=int(spec.mode_id),
+                    exclude_tokens=excluded_tokens,
+                    now_s_override=now_s(),
                 )
-
-            artifact = await _generate_video_with_token(
-                token=token,
-                prompt=prompt,
-                aspect_ratio=aspect_ratio,
-                resolution_name=resolved_resolution_name,
-                seconds=seconds,
-                preset=resolved_preset,
-                timeout_s=timeout_s,
-                input_references=input_references,
-                progress_cb=_progress,
-            )
-            raw, _mime = await _download_video_bytes(token, artifact.video_url)
-            success = True
-        except BaseException as exc:
-            fail_exc = exc
-            raise
-        finally:
-            await _acct_dir.release(acct)
-            kind = (
-                FeedbackKind.SUCCESS
-                if success
-                else _feedback_kind(fail_exc)
-                if fail_exc
-                else FeedbackKind.SERVER_ERROR
-            )
-            await _acct_dir.feedback(token, kind, int(spec.mode_id))
-            if success:
-                asyncio.create_task(_quota_sync(token, int(spec.mode_id)))
             else:
-                asyncio.create_task(_fail_sync(token, int(spec.mode_id), fail_exc))
+                acct = await _acct_dir.reserve_video(
+                    pool_candidates=spec.pool_candidates(),
+                    resolution_name=resolved_resolution_name,
+                    exclude_tokens=excluded_tokens,
+                    now_s_override=now_s(),
+                )
+            if acct is None:
+                if last_error is not None:
+                    raise last_error
+                raise RateLimitError("No available accounts for video generation")
 
-        path = _save_video_bytes(raw, job.id)
+            token = acct.token
+            selected_mode_id = acct.mode_id
+            success = False
+            fail_exc: BaseException | None = None
+            try:
+                cfg = get_config()
+                timeout_s = cfg.get_float("video.timeout", 180.0)
+
+                async def _progress(progress: int) -> None:
+                    await _set_job_status(
+                        job, status="in_progress", progress=max(1, progress)
+                    )
+
+                if spec.mode_id == ModeId.CONSOLE:
+                    from app.dataplane.reverse.transport.console_media import generate_video
+
+                    reference_urls = [
+                        str(item.get("image_url") or "").strip()
+                        for item in (input_references or [])
+                        if isinstance(item, dict) and str(item.get("image_url") or "").strip()
+                    ]
+                    video_url, _ = await generate_video(
+                        token,
+                        model=job.model,
+                        prompt=prompt,
+                        duration=seconds,
+                        aspect_ratio=aspect_ratio,
+                        resolution=resolved_resolution_name,
+                        reference_urls=reference_urls or None,
+                        progress=_progress,
+                    )
+                    artifact = _VideoArtifact(
+                        video_url=video_url,
+                        video_post_id="",
+                        asset_id="",
+                        thumbnail_url="",
+                    )
+                else:
+                    artifact = await _generate_video_with_token(
+                        token=token,
+                        prompt=prompt,
+                        aspect_ratio=aspect_ratio,
+                        resolution_name=resolved_resolution_name,
+                        seconds=seconds,
+                        preset=resolved_preset,
+                        timeout_s=timeout_s,
+                        input_references=input_references,
+                        progress_cb=_progress,
+                    )
+                raw, mime = await _download_video_bytes(token, artifact.video_url)
+                success = True
+            except BaseException as exc:
+                fail_exc = exc
+            finally:
+                await _acct_dir.release(acct)
+                kind = (
+                    FeedbackKind.SUCCESS
+                    if success
+                    else _feedback_kind(fail_exc)
+                    if fail_exc
+                    else FeedbackKind.SERVER_ERROR
+                )
+                await _acct_dir.feedback(token, kind, selected_mode_id)
+                if success:
+                    asyncio.create_task(_quota_sync(token, selected_mode_id))
+                else:
+                    asyncio.create_task(_fail_sync(token, selected_mode_id, fail_exc))
+
+            if fail_exc is None:
+                break
+
+            last_error = fail_exc
+            if not _is_video_retryable(fail_exc) or attempt + 1 >= max_attempts:
+                raise fail_exc
+            if token not in excluded_tokens:
+                excluded_tokens.append(token)
+            delay_s = max(0.0, get_config().get_float("video.retry_delay_sec", 0.5))
+            if delay_s:
+                await asyncio.sleep(min(5.0, delay_s * (2**attempt)))
+
+        if artifact is None:
+            raise last_error or UpstreamError("Video generation returned no artifact")
+
+        path = _save_video_bytes(raw, job.id, mime)
         async with _VIDEO_JOBS_LOCK:
             job.status = "completed"
             job.progress = 100
@@ -925,6 +1117,7 @@ async def create_video(
     resolution_name: str | None = None,
     preset: str | None = None,
     input_references: list[dict[str, Any]] | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     resolved = model_aliases.resolve(model)
     if resolved is None or not resolved.spec.is_video():
@@ -936,11 +1129,25 @@ async def create_video(
         raise ValidationError("prompt cannot be empty", param="prompt")
 
     normalized_seconds = _coerce_seconds(seconds)
-    validate_video_length(normalized_seconds)
+    if resolved.spec.mode_id == ModeId.CONSOLE:
+        if not 1 <= normalized_seconds <= 15:
+            raise ValidationError("Console video duration must be between 1 and 15 seconds", param="duration")
+    else:
+        validate_video_length(normalized_seconds)
     normalized_size = (size or "720x1280").strip()
     _aspect_ratio, default_resolution_name = _resolve_video_size(normalized_size)
     _resolve_video_resolution_name(resolution_name, default=default_resolution_name)
     _resolve_video_preset(preset)
+    normalized_idempotency_key = _normalize_idempotency_key(idempotency_key)
+    request_signature = _video_request_signature(
+        model=real_model,
+        prompt=cleaned_prompt,
+        seconds=normalized_seconds,
+        size=normalized_size,
+        resolution_name=resolution_name,
+        preset=preset,
+        input_references=input_references,
+    )
 
     job = _VideoJob(
         id=f"video_{uuid.uuid4().hex}",
@@ -951,7 +1158,13 @@ async def create_video(
         quality=_VIDEO_QUALITY,
         created_at=int(time.time()),
     )
-    await _put_video_job(job)
+    existing_job = await _put_video_job(
+        job,
+        idempotency_key=normalized_idempotency_key,
+        request_signature=request_signature,
+    )
+    if existing_job is not None:
+        return existing_job.to_dict()
     asyncio.create_task(
         _run_video_job(
             job,
@@ -1055,7 +1268,14 @@ async def completions(
     preset: str | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Chat-completions video support on top of the same core flow."""
-    validate_video_length(seconds)
+    resolved = model_aliases.resolve(model)
+    if resolved is None or not resolved.spec.is_video():
+        raise ValidationError(f"Model {model!r} is not a video model", param="model")
+    if resolved.spec.mode_id == ModeId.CONSOLE:
+        if not 1 <= seconds <= 15:
+            raise ValidationError("Console video duration must be between 1 and 15 seconds", param="seconds")
+    else:
+        validate_video_length(seconds)
     aspect_ratio, default_resolution_name = _resolve_video_size(size)
     resolved_resolution_name = _resolve_video_resolution_name(
         resolution_name,
@@ -1088,7 +1308,11 @@ async def completions(
                 file_id=file_id,
             )
 
-        return await _run_video_with_account(model=model, runner=_runner)
+        return await _run_video_with_account(
+            model=model,
+            resolution_name=resolved_resolution_name,
+            runner=_runner,
+        )
 
     if is_stream:
 

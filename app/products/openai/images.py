@@ -269,6 +269,83 @@ _LITE_IMAGE_MODELS = frozenset({"grok-imagine-image-lite"})
 _PRO_IMAGE_MODELS  = frozenset({"grok-imagine-image-pro"})
 
 
+def _is_console_image_model(spec: ModelSpec) -> bool:
+    return spec.mode_id == ModeId.CONSOLE and spec.is_image()
+
+
+def _console_image_content(item: dict[str, Any]) -> str:
+    url = str(item.get("url") or "").strip()
+    if url:
+        return url
+    encoded = str(item.get("b64_json") or "").strip()
+    if encoded:
+        return f"data:image/png;base64,{encoded}"
+    return ""
+
+
+async def _run_console_image_request(
+    *,
+    spec: ModelSpec,
+    runner: Callable[[str], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    from app.dataplane.account import _directory as _acct_dir
+
+    if _acct_dir is None:
+        raise RateLimitError("Account directory not initialised")
+    acct = await _acct_dir.reserve(
+        pool_candidates=spec.pool_candidates(),
+        mode_id=int(spec.mode_id),
+        now_s_override=now_s(),
+    )
+    if acct is None:
+        raise RateLimitError("No available accounts for Console image generation")
+    token = acct.token
+    success = False
+    fail_exc: BaseException | None = None
+    try:
+        result = await runner(token)
+        success = True
+        return result
+    except BaseException as exc:
+        fail_exc = exc
+        raise
+    finally:
+        await _acct_dir.release(acct)
+        kind = (
+            FeedbackKind.SUCCESS
+            if success
+            else _feedback_kind(fail_exc)
+            if fail_exc
+            else FeedbackKind.SERVER_ERROR
+        )
+        await _acct_dir.feedback(token, kind, acct.mode_id)
+        if success:
+            asyncio.create_task(_quota_sync(token, acct.mode_id))
+        else:
+            asyncio.create_task(_fail_sync(token, acct.mode_id, fail_exc))
+
+
+def _console_image_stream(
+    *,
+    model: str,
+    result: dict[str, Any],
+    response_id: str,
+) -> AsyncGenerator[str, None]:
+    async def _stream() -> AsyncGenerator[str, None]:
+        for item in result.get("data", []):
+            if not isinstance(item, dict):
+                continue
+            content = _console_image_content(item)
+            if content:
+                chunk = make_stream_chunk(response_id, model, content)
+                yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+        final = make_stream_chunk(response_id, model, "", is_final=True)
+        yield f"data: {orjson.dumps(final).decode()}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return _stream()
+
+
 async def generate(
     *,
     model:           str,
@@ -276,6 +353,9 @@ async def generate(
     n:               int  = 1,
     size:            str  = "1024x1024",
     response_format: str  = "url",
+    aspect_ratio:    str | None = None,
+    resolution:      str | None = None,
+    quality:         str | None = None,
     stream:          bool = False,
     chat_format:     bool = False,
 ) -> dict | AsyncGenerator[str, None]:
@@ -292,6 +372,64 @@ async def generate(
     """
     cfg          = get_config()
     spec         = resolve_model(model)
+    if _is_console_image_model(spec):
+        from app.dataplane.reverse.protocol.xai_console_media import (
+            normalize_image_quality,
+            normalize_image_ratio,
+            normalize_image_resolution,
+        )
+        from app.dataplane.reverse.transport.console_media import generate_image
+
+        if not prompt.strip():
+            raise ValidationError("prompt cannot be empty", param="prompt")
+        if not 1 <= n <= 10:
+            raise ValidationError("n must be between 1 and 10", param="n")
+        try:
+            ratio = normalize_image_ratio(aspect_ratio, size)
+            normalized_resolution = normalize_image_resolution(resolution)
+            normalized_quality = normalize_image_quality(model, quality)
+        except ValueError as exc:
+            raise ValidationError(str(exc), param="image") from exc
+        response_id = make_response_id()
+
+        async def _request(token: str) -> dict[str, Any]:
+            return await generate_image(
+                token,
+                model=model,
+                prompt=prompt,
+                count=n,
+                response_format=response_format,
+                aspect_ratio=ratio,
+                resolution=normalized_resolution,
+                quality=normalized_quality,
+            )
+
+        if stream:
+            async def _stream() -> AsyncGenerator[str, None]:
+                result = await _run_console_image_request(spec=spec, runner=_request)
+                async for chunk in _console_image_stream(
+                    model=model,
+                    result=result,
+                    response_id=response_id,
+                ):
+                    yield chunk
+
+            return _stream()
+
+        result = await _run_console_image_request(spec=spec, runner=_request)
+        if not chat_format:
+            return result
+        contents = [
+            _console_image_content(item)
+            for item in result.get("data", [])
+            if isinstance(item, dict)
+        ]
+        return make_chat_response(
+            model,
+            "\n\n".join(item for item in contents if item),
+            prompt_content=prompt,
+            response_id=response_id,
+        )
     aspect_ratio = resolve_aspect_ratio(size)
     enable_nsfw  = cfg.get_bool("features.enable_nsfw", True)
 
@@ -641,7 +779,11 @@ async def _prepare_edit_reference(
 ) -> _EditReference:
     """Upload one edit reference and resolve it to the upstream content URL."""
     try:
-        file_id, file_uri = await upload_from_input(token, image_input)
+        file_id, file_uri = await upload_from_input(
+            token,
+            image_input,
+            allowed_mime_prefixes=("image/",),
+        )
         return _EditReference(
             file_id=file_id,
             content_url=resolve_uploaded_asset_reference(token, file_id, file_uri),
@@ -1109,12 +1251,82 @@ async def edit(
     n:               int  = 1,
     size:            str  = "1024x1024",
     response_format: str  = "url",
+    aspect_ratio:    str | None = None,
+    resolution:      str | None = None,
+    quality:         str | None = None,
     stream:          bool = False,
     chat_format:     bool = False,
 ) -> dict | AsyncGenerator[str, None]:
     """Edit images via media/post/create + imagine-image-edit chat payload."""
     cfg = get_config()
     spec = resolve_model(model)
+    if _is_console_image_model(spec):
+        from app.dataplane.reverse.protocol.xai_console_media import (
+            normalize_image_quality,
+            normalize_image_ratio,
+            normalize_image_resolution,
+            validate_https_or_data_url,
+        )
+        from app.dataplane.reverse.transport.console_media import edit_image
+
+        if not 1 <= n <= 10:
+            raise ValidationError("n must be between 1 and 10", param="n")
+        prompt, image_inputs = _extract_edit_prompt_and_inputs(messages)
+        image_inputs = image_inputs[-3:]
+        if not image_inputs or any(
+            not validate_https_or_data_url(item, "image") for item in image_inputs
+        ):
+            raise ValidationError(
+                "Console image editing requires 1 to 3 HTTPS or image data URLs",
+                param="image",
+            )
+        try:
+            ratio = normalize_image_ratio(aspect_ratio, size)
+            normalized_resolution = normalize_image_resolution(resolution)
+            normalized_quality = normalize_image_quality(model, quality)
+        except ValueError as exc:
+            raise ValidationError(str(exc), param="image") from exc
+        response_id = make_response_id()
+
+        async def _request(token: str) -> dict[str, Any]:
+            return await edit_image(
+                token,
+                model=model,
+                prompt=prompt,
+                image_urls=image_inputs,
+                count=n,
+                response_format=response_format,
+                aspect_ratio=ratio,
+                resolution=normalized_resolution,
+                quality=normalized_quality,
+            )
+
+        if stream:
+            async def _stream() -> AsyncGenerator[str, None]:
+                result = await _run_console_image_request(spec=spec, runner=_request)
+                async for chunk in _console_image_stream(
+                    model=model,
+                    result=result,
+                    response_id=response_id,
+                ):
+                    yield chunk
+
+            return _stream()
+
+        result = await _run_console_image_request(spec=spec, runner=_request)
+        if not chat_format:
+            return result
+        contents = [
+            _console_image_content(item)
+            for item in result.get("data", [])
+            if isinstance(item, dict)
+        ]
+        return make_chat_response(
+            model,
+            "\n\n".join(item for item in contents if item),
+            prompt_content=prompt,
+            response_id=response_id,
+        )
     timeout_s = cfg.get_float("chat.timeout", 120.0)
     if not (1 <= n <= _EDIT_MAX_N):
         raise ValidationError("image edit n must be between 1 and 2", param="n")
@@ -1126,15 +1338,15 @@ async def edit(
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
 
-    acct = await _acct_dir.reserve(
+    acct = await _acct_dir.reserve_image_edit(
         pool_candidates = spec.pool_candidates(),
-        mode_id         = int(spec.mode_id),
         now_s_override  = now_s(),
     )
     if acct is None:
         raise RateLimitError("No available accounts for image edit")
 
     token       = acct.token
+    selected_mode_id = acct.mode_id
     response_id = make_response_id()
     edit_prompt = prompt
 
@@ -1224,11 +1436,11 @@ async def edit(
             finally:
                 await _acct_dir.release(acct)
                 kind = FeedbackKind.SUCCESS if success else _feedback_kind(fail_exc) if fail_exc else FeedbackKind.SERVER_ERROR
-                await _acct_dir.feedback(token, kind, int(spec.mode_id))
+                await _acct_dir.feedback(token, kind, selected_mode_id)
                 if success:
-                    asyncio.create_task(_quota_sync(token, int(spec.mode_id)))
+                    asyncio.create_task(_quota_sync(token, selected_mode_id))
                 else:
-                    asyncio.create_task(_fail_sync(token, int(spec.mode_id), fail_exc))
+                    asyncio.create_task(_fail_sync(token, selected_mode_id, fail_exc))
 
         return _sse_stream()
 
@@ -1265,11 +1477,11 @@ async def edit(
     finally:
         await _acct_dir.release(acct)
         kind = FeedbackKind.SUCCESS if success else _feedback_kind(fail_exc) if fail_exc else FeedbackKind.SERVER_ERROR
-        await _acct_dir.feedback(token, kind, int(spec.mode_id))
+        await _acct_dir.feedback(token, kind, selected_mode_id)
         if success:
-            asyncio.create_task(_quota_sync(token, int(spec.mode_id)))
+            asyncio.create_task(_quota_sync(token, selected_mode_id))
         else:
-            asyncio.create_task(_fail_sync(token, int(spec.mode_id), fail_exc))
+            asyncio.create_task(_fail_sync(token, selected_mode_id, fail_exc))
 
     if chat_format:
         content = "\n\n".join(image.markdown_value for image in images)

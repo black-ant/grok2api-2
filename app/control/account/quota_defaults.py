@@ -20,6 +20,17 @@ if TYPE_CHECKING:
     pass
 
 
+IMAGE_PRO_MODE_ID = 6
+IMAGE_EDIT_MODE_ID = 7
+IMAGE_VIDEO_MODE_ID = 8
+IMAGE_VIDEO_720P_MODE_ID = 9
+IMAGE_QUOTA_MODE_IDS = (IMAGE_PRO_MODE_ID, IMAGE_EDIT_MODE_ID)
+VIDEO_QUOTA_MODE_IDS = (IMAGE_VIDEO_MODE_ID, IMAGE_VIDEO_720P_MODE_ID)
+IMAGINE_QUOTA_MODE_IDS = IMAGE_QUOTA_MODE_IDS + VIDEO_QUOTA_MODE_IDS
+IMAGE_QUOTA_WINDOW_SECONDS = 86_400
+IMAGE_QUOTA_EXT_KEY = "imagine_quota"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -33,6 +44,39 @@ def _w(remaining: int, total: int, window_seconds: int) -> QuotaWindow:
         reset_at=None,
         synced_at=None,
         source=QuotaSource.DEFAULT,
+    )
+
+
+def image_quota_window(ext: dict, mode_key: str) -> QuotaWindow:
+    raw_group = ext.get(IMAGE_QUOTA_EXT_KEY) if isinstance(ext, dict) else None
+    raw = raw_group.get(mode_key) if isinstance(raw_group, dict) else None
+    if not isinstance(raw, dict):
+        return QuotaWindow(
+            remaining=-1,
+            total=0,
+            window_seconds=IMAGE_QUOTA_WINDOW_SECONDS,
+            reset_at=None,
+            synced_at=None,
+            source=QuotaSource.DEFAULT,
+        )
+    try:
+        remaining = int(raw.get('remaining', -1))
+        total = max(0, int(raw.get('total', 0)))
+        window_seconds = max(
+            1, int(raw.get('window_seconds', IMAGE_QUOTA_WINDOW_SECONDS))
+        )
+        reset_at = raw.get('reset_at')
+        synced_at = raw.get('synced_at')
+        source = QuotaSource(int(raw.get('source', int(QuotaSource.DEFAULT))))
+    except (TypeError, ValueError):
+        return image_quota_window({}, mode_key)
+    return QuotaWindow(
+        remaining=remaining,
+        total=total,
+        window_seconds=window_seconds,
+        reset_at=reset_at,
+        synced_at=synced_at,
+        source=source,
     )
 
 
@@ -202,4 +246,14 @@ __all__ = [
     "normalize_quota_window",
     "supported_mode_ids",
     "supports_mode",
+    'IMAGE_PRO_MODE_ID',
+    'IMAGE_EDIT_MODE_ID',
+    'IMAGE_VIDEO_MODE_ID',
+    'IMAGE_VIDEO_720P_MODE_ID',
+    'IMAGE_QUOTA_MODE_IDS',
+    'VIDEO_QUOTA_MODE_IDS',
+    'IMAGINE_QUOTA_MODE_IDS',
+    'IMAGE_QUOTA_WINDOW_SECONDS',
+    'IMAGE_QUOTA_EXT_KEY',
+    'image_quota_window',
 ]

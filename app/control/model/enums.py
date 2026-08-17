@@ -41,6 +41,9 @@ class Capability(IntFlag):
     VOICE = 16
     ASSET = 32
     CONSOLE_CHAT = 64  # 通过 console.x.ai/v1/responses 路由
+    TTS = 128  # Console text-to-speech model capability
+    STT = 256  # Console speech-to-text model capability
+    REALTIME = 512  # Console realtime voice model capability
 
 
 # Human-readable mode strings in API order.

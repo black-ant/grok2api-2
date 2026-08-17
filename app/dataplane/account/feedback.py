@@ -11,7 +11,7 @@ selector strategy. No runtime ``if`` inside the apply helpers themselves.
 """
 
 from app.platform.runtime.clock import now_s
-from ..shared.enums import ALL_MODE_IDS, StatusId
+from ..shared.enums import ALL_MODE_IDS, IMAGINE_QUOTA_MODE_IDS, StatusId
 from .table import AccountRuntimeTable
 
 # Health adjustment constants.
@@ -32,7 +32,11 @@ _MAX_HEALTH = 1.0
 def apply_success_quota(table: AccountRuntimeTable, idx: int, mode_id: int) -> None:
     """Quota strategy: decrement per-mode quota and improve health."""
     quota_col = table._quota_col(mode_id)
-    quota_col[idx] = max(0, int(quota_col[idx]) - 1)
+    current = int(quota_col[idx])
+    if mode_id in IMAGINE_QUOTA_MODE_IDS and current < 0:
+        quota_col[idx] = current
+    else:
+        quota_col[idx] = max(0, current - 1)
     _bump_health(table, idx)
 
 

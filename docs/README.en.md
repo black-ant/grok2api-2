@@ -258,20 +258,30 @@ Runtime config can also be overridden via `GROK_`-prefixed env vars, e.g. `GROK_
 | `grok-4.20-auto` | `auto` | `super`, prefers higher-tier accounts |
 | `grok-4.20-expert` | `expert` | `super`, prefers higher-tier accounts |
 | `grok-4.20-heavy` | `heavy` | `heavy` |
+| `grok-chat-fast` | `fast` | `basic` |
+| `grok-chat-auto` | `auto` | `super` |
+| `grok-chat-expert` | `expert` | `super` |
+| `grok-chat-heavy` | `heavy` | `heavy` |
 | `grok-4.3-beta` | `grok-420-computer-use-sa` | `super` |
+
+`grok-composer-2.5-fast` is listed for catalog visibility, but it requires the remote Build OAuth provider. Because the local gateway has no equivalent Build provider, it returns `supported_in_api=false` and is not routed.
 
 ### Chat (console.x.ai free)
 
 | Model | reasoning effort | Notes |
 | :-- | :-- | :-- |
-| `grok-4-console` | default | Free account |
-| `grok-4.3-console` | medium | Free account |
-| `grok-4.3-low-console` | low | Free account |
-| `grok-4.3-medium-console` | medium | Free account |
-| `grok-4.3-high-console` | high | Free account |
+| `grok-4.3` / `grok-4.3-console` | medium by default | Free account |
+| `grok-4.3-low` | low | Free account |
+| `grok-4.3-medium` | medium | Free account |
+| `grok-4.3-high` | high | Free account |
+| `grok-4.5` / `grok-4.5-console` | medium by default | Free account |
+| `grok-4.5-low` | low | Free account |
+| `grok-4.5-medium` | medium | Free account |
+| `grok-4.5-high` | high | Free account |
 | `grok-4.20-0309-console` | default | Free account |
 | `grok-4.20-0309-reasoning-console` | fixed reasoning | Free account |
 | `grok-4.20-multi-agent-console` | default | Free account, multi-agent |
+| `grok-build-0.1` / `grok-build-console` | no configurable reasoning | Free account |
 
 ### Image / Image Edit / Video
 
@@ -282,6 +292,19 @@ Runtime config can also be overridden via `GROK_`-prefixed env vars, e.g. `GROK_
 | `grok-imagine-image-pro` | `auto` | `super` |
 | `grok-imagine-image-edit` | `auto` | `super` |
 | `grok-imagine-video` | `auto` | `super` |
+
+### Console media / audio catalog
+
+These remote Console model IDs are included in the local registry and routed through the local gateways with `supported_in_api=true`.
+
+| Model | Capability | Status |
+| :-- | :-- | :-- |
+| `grok-imagine-image-quality` / `grok-imagine-image-2.0` / `grok-imagine-image-quality-2.0` | image / image edit | `/v1/images/generations`, `/v1/images/edits`; `quality-2.0` maps to the upstream quality model |
+| `grok-imagine-video-1.5` | video | `/v1/videos` creation, status polling, and local content cache |
+| `grok-voice-latest` / `grok-voice-think-fast-1.0` / `grok-voice-think-fast-2.0` | TTS / realtime | `/v1/tts`, `/v1/audio/speech`, `/v1/audio/tasks`, `/v1/tts/voices`, `/v1/realtime` |
+| `grok-stt` | STT | `/v1/stt`, `/v1/audio/transcriptions` |
+
+Live upstream account validation is not confirmed locally. The confirmed scope is local model resolution, request validation, DPoP, account selection, error feedback, and safe asset downloading.
 
 <br>
 
@@ -299,6 +322,12 @@ Runtime config can also be overridden via `GROK_`-prefixed env vars, e.g. `GROK_
 | `POST /v1/videos` | yes | Async video job creation |
 | `GET /v1/videos/{video_id}` | yes | Query a video job |
 | `GET /v1/videos/{video_id}/content` | yes | Download the final video |
+| `POST /v1/audio/speech`, `/v1/audio/tasks` | yes | Console TTS |
+| `POST /v1/tts` | yes | Console TTS contract using `text` |
+| `GET /v1/tts/voices`, `/v1/tts/voices/{voice_id}` | yes | Console TTS voice discovery |
+| `POST /v1/audio/transcriptions` | yes | Console STT |
+| `POST /v1/stt` | yes | Console STT contract |
+| `GET /v1/realtime`, `/v1/stt` | client key | Voice WebSocket proxy |
 | `GET /v1/files/video?id=...` | no | Locally cached video |
 | `GET /v1/files/image?id=...` | no | Locally cached image |
 

@@ -94,7 +94,7 @@ resource_proxy_pool = []
 skip_ssl_verify = false
 
 [proxy.clearance]
-# Cloudflare clearance 模式：none | manual | flaresolverr
+# Cloudflare clearance 模式：none | manual | flaresolverr | on_demand
 mode = "none"
 # 手动模式：Cloudflare Cookie 字符串
 cf_cookies = ""
@@ -153,6 +153,15 @@ max_inflight = 8
 # ==================== 对话配置 ====================
 [chat]
 timeout = 60
+# 只在连续没有语义生成事件时触发的流式空闲超时（秒）
+stream_idle_timeout = 60
+
+
+# ==================== Console API ====================
+[console]
+# Console upstream base URL; kept configurable for protocol tests and mirrors.
+base_url = "https://console.x.ai"
+timeout = 120
 
 
 # ==================== 图像配置 ====================
@@ -164,11 +173,17 @@ stream_timeout = 60
 # ==================== 视频配置 ====================
 [video]
 timeout = 60
+# 创建阶段最多尝试的账号数；只对可重试的上游失败生效
+max_attempts = 3
+# 视频创建重试之间的基础等待时间（秒）
+retry_delay_sec = 0.5
 
 
 # ==================== 语音配置 ====================
 [voice]
 timeout = 60
+# Console STT multipart input limit (MB)
+input_max_mb = 128
 
 
 # ==================== 资产配置 ====================
@@ -177,6 +192,12 @@ upload_timeout = 60
 download_timeout = 60
 list_timeout = 60
 delete_timeout = 60
+# 外部 URL / data URI 输入的最大大小（MB）
+input_max_mb = 20
+# 外部 URL 输入的单次抓取超时（秒）
+input_timeout = 30
+# 外部 URL 输入允许跟随的最大重定向次数
+max_redirects = 5
 
 
 # ==================== NSFW 操作 ====================

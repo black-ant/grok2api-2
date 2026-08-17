@@ -20,6 +20,7 @@ from app.platform.config.snapshot import config
 from app.platform.errors import AppError, ErrorKind, ValidationError
 from app.platform.logging.logger import logger, reload_file_logging
 from app.platform.request_logging import request_log_store
+from app.platform.usage_audit import TRACKED_OPERATIONS, period_range
 from app.platform.storage import reconcile_local_media_cache_async
 from app.control.model import aliases as model_aliases
 from app.control.model import registry as model_registry
@@ -274,6 +275,73 @@ async def get_request_logs(
         media_type="application/json",
     )
 
+
+def _validate_audit_filters(period: str, operation: str | None) -> tuple[float, float, str, str]:
+    if operation and operation not in TRACKED_OPERATIONS:
+        raise ValidationError(
+            f"Unsupported audit operation: {operation}",
+            param="operation",
+            code="invalid_audit_operation",
+        )
+    try:
+        return period_range(period)
+    except ValueError as exc:
+        raise ValidationError(str(exc), param="period", code="invalid_audit_period") from exc
+
+
+@router.get("/request-audits", tags=[_TAG_ADMIN_SYSTEM])
+async def get_request_audits(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    period: str = Query("24h"),
+    operation: str | None = Query(None),
+    model: str | None = Query(None),
+    status: int | None = Query(None, ge=100, le=599),
+):
+    start_ts, end_ts, start_at, end_at = _validate_audit_filters(period, operation)
+    total, items = await request_log_store.audit_page(
+        limit=limit,
+        offset=offset,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        operation=operation,
+        model=model,
+        status=status,
+    )
+    return Response(
+        content=orjson.dumps(
+            {
+                "period": period,
+                "range": {"start": start_at, "end": end_at},
+                "retention_days": request_log_store.retention_days,
+                "retained_dates": request_log_store.retained_dates(),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "items": items,
+            }
+        ),
+        media_type="application/json",
+    )
+
+
+@router.get("/request-audits/summary", tags=[_TAG_ADMIN_SYSTEM])
+async def get_request_audit_summary(
+    period: str = Query("24h"),
+    operation: str | None = Query(None),
+    model: str | None = Query(None),
+    status: int | None = Query(None, ge=100, le=599),
+):
+    _validate_audit_filters(period, operation)
+    summary = await request_log_store.audit_summary(
+        period=period,
+        operation=operation,
+        model=model,
+        status=status,
+    )
+    summary["retention_days"] = request_log_store.retention_days
+    summary["retained_dates"] = request_log_store.retained_dates()
+    return Response(content=orjson.dumps(summary), media_type="application/json")
 
 @router.get("/debug/chat/models", tags=[_TAG_ADMIN_SYSTEM])
 async def list_debug_chat_models():

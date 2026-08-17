@@ -381,7 +381,8 @@
         "clearanceMode": {
           "none": "Deaktiviert",
           "manual": "Manuell",
-          "flaresolverr": "FlareSolverr"
+          "flaresolverr": "FlareSolverr",
+          "onDemand": "Bei Bedarf"
         }
       },
       "fields": {

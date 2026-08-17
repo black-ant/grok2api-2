@@ -5,7 +5,7 @@ from typing import Any
 import orjson
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.control.account.quota_defaults import supports_mode
 from app.control.account.state_machine import is_manageable
@@ -125,6 +125,8 @@ async def messages_endpoint(req: MessagesRequest, request: Request):
 
     cfg       = get_config()
     is_stream = req.stream if req.stream is not None else cfg.get_bool("features.stream", True)
+    request.state.request_log_operation = "messages"
+    request.state.request_log_streaming = is_stream
 
     # thinking flag: enable when request has thinking config or config default
     if req.thinking is not None and isinstance(req.thinking, dict):

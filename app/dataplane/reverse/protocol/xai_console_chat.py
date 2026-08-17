@@ -32,8 +32,13 @@ from typing import Any, AsyncGenerator
 
 import orjson
 
-from app.platform.errors import UpstreamError, parse_retry_after
+from app.platform.errors import StreamIdleTimeout, UpstreamError, parse_retry_after
+from app.platform.config.snapshot import get_config
 from app.platform.logging.logger import logger
+from app.dataplane.reverse.transport.semantic_idle import (
+    is_console_response_activity,
+    with_semantic_idle_timeout,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,10 +48,21 @@ from app.platform.logging.logger import logger
 # console.x.ai 上可用的模型（通过 grok.com SSO 免费访问）
 # key = grok2api 对外暴露的模型名，value = console.x.ai 实际 model 字段
 CONSOLE_MODELS: dict[str, str] = {
+    "grok-4.3":                              "grok-4.3",
     "grok-4.3-console":                     "grok-4.3",
     "grok-4.3-low":                         "grok-4.3",
     "grok-4.3-medium":                      "grok-4.3",
     "grok-4.3-high":                        "grok-4.3",
+    "grok-4.5":                              "grok-4.5",
+    "grok-4.5-console":                      "grok-4.5",
+    "grok-4.5-low":                          "grok-4.5",
+    "grok-4.5-medium":                       "grok-4.5",
+    "grok-4.5-high":                         "grok-4.5",
+    "grok-4.6":                              "grok-4.6",
+    "grok-4.6-low":                          "grok-4.6",
+    "grok-4.6-medium":                       "grok-4.6",
+    "grok-4.6-high":                         "grok-4.6",
+    "grok-4.6-xhigh":                        "grok-4.6",
     "grok-4.20-0309-reasoning-console":     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-console":               "grok-4.20-0309",
     "grok-4.20-0309-non-reasoning-console": "grok-4.20-0309-non-reasoning",
@@ -55,12 +71,23 @@ CONSOLE_MODELS: dict[str, str] = {
     "grok-4.20-multi-agent-medium":         "grok-4.20-multi-agent-0309",
     "grok-4.20-multi-agent-high":           "grok-4.20-multi-agent-0309",
     "grok-4.20-multi-agent-xhigh":          "grok-4.20-multi-agent-0309",
+    "grok-build-0.1":                        "grok-build-0.1",
     "grok-build-console":                   "grok-build-0.1",
+    "grok-imagine-image-quality":            "grok-imagine-image-quality",
+    "grok-imagine-image-2.0":                "grok-imagine-image-2.0",
+    "grok-imagine-image-quality-2.0":        "grok-imagine-image-quality",
+    "grok-imagine-video-1.5":                "grok-imagine-video-1.5",
+    "grok-voice-latest":                     "grok-voice-latest",
+    "grok-voice-think-fast-2.0":             "grok-voice-think-fast-2.0",
+    "grok-voice-think-fast-1.0":             "grok-voice-think-fast-1.0",
+    "grok-stt":                              "grok-stt",
 }
 
 # 需要附带 reasoning 字段的模型（grok-4.3 系列需要，grok-4.20 系列不需要）
 _MODELS_WITH_REASONING_FIELD: frozenset[str] = frozenset({
     "grok-4.3",
+    "grok-4.5",
+    "grok-4.6",
     "grok-4.20-multi-agent-0309",
 })
 
@@ -69,6 +96,13 @@ _MODEL_FIXED_EFFORT: dict[str, str] = {
     "grok-4.3-low":    "low",
     "grok-4.3-medium": "medium",
     "grok-4.3-high":   "high",
+    "grok-4.5-low":    "low",
+    "grok-4.5-medium": "medium",
+    "grok-4.5-high":   "high",
+    "grok-4.6-low":     "low",
+    "grok-4.6-medium":  "medium",
+    "grok-4.6-high":    "high",
+    "grok-4.6-xhigh":   "xhigh",
     "grok-4.20-multi-agent-low":    "low",
     "grok-4.20-multi-agent-medium": "medium",
     "grok-4.20-multi-agent-high":   "high",
@@ -99,7 +133,13 @@ _EFFORT_MAP: dict[str, str] = {
     "medium":  "medium",
     "high":    "high",
     "xhigh":   "xhigh",
+    "max":     "high",
 }
+
+_MODELS_MAX_TO_XHIGH: frozenset[str] = frozenset({
+    "grok-4.6",
+    "grok-4.20-multi-agent-0309",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +199,17 @@ def build_console_payload(
         if content_blocks:
             input_items.append({"role": api_role, "content": content_blocks})
 
-    # reasoning effort：模型名固定值优先，其次用户传入，最后默认 medium
-    effort = _MODEL_FIXED_EFFORT.get(model) or _EFFORT_MAP.get(reasoning_effort or "medium", "medium")
-
     # 获取 console 实际模型名
     console_model = CONSOLE_MODELS.get(model, model)
+
+    # reasoning effort：模型名固定值优先，其次用户传入，最后默认 medium
+    requested_effort = str(reasoning_effort or "medium").strip().lower()
+    effort = _MODEL_FIXED_EFFORT.get(model)
+    if effort is None:
+        if requested_effort == "max" and console_model in _MODELS_MAX_TO_XHIGH:
+            effort = "xhigh"
+        else:
+            effort = _EFFORT_MAP.get(requested_effort, "medium")
 
     payload: dict[str, Any] = {
         "model": console_model,
@@ -317,8 +363,8 @@ async def stream_console_chat(
 
         await proxy.feedback(lease, _success_feedback())
 
-        current_event = ""
-        try:
+        async def _events() -> AsyncGenerator[tuple[str, str], None]:
+            current_event = ""
             async for raw_line in response.aiter_lines():
                 # curl-cffi 的 aiter_lines 返回 bytes，先解码为 str
                 if isinstance(raw_line, bytes):
@@ -334,6 +380,19 @@ async def stream_console_chat(
                     current_event = ""
                 elif kind == "done":
                     return
+
+        stream_idle_timeout_s = get_config().get_float(
+            "chat.stream_idle_timeout", timeout_s
+        )
+        try:
+            async for event in with_semantic_idle_timeout(
+                _events(),
+                stream_idle_timeout_s,
+                is_console_response_activity,
+            ):
+                yield event
+        except StreamIdleTimeout:
+            raise
         except Exception as exc:
             raise UpstreamError(f"Console stream read failed: {exc}", status=502) from exc
 

@@ -9,6 +9,7 @@ from app.platform.logging.logger import logger
 from app.platform.runtime.clock import ms_to_s
 from app.control.account.models import AccountRecord
 from app.control.account.quota_defaults import normalize_quota_set
+from app.control.account.quota_defaults import image_quota_window
 from app.control.account.repository import AccountRepository
 from app.control.account.state_machine import derive_status
 from ..shared.enums import POOL_STR_TO_ID, STATUS_STR_TO_ID, StatusId
@@ -35,6 +36,10 @@ def _record_to_slot_args(record: AccountRecord) -> dict:
     heavy_w = qs.heavy
     grok_4_3_w = qs.grok_4_3
     console_w = qs.console
+    image_pro_w = image_quota_window(record.ext, 'image_pro')
+    image_edit_w = image_quota_window(record.ext, 'image_edit')
+    video_w = image_quota_window(record.ext, 'video')
+    video_720p_w = image_quota_window(record.ext, 'video_720p')
     # fmt: off
     return dict(
         pool_id         = pool_id,
@@ -45,24 +50,40 @@ def _record_to_slot_args(record: AccountRecord) -> dict:
         quota_heavy     = max(0, heavy_w.remaining)     if heavy_w    is not None else -1,
         quota_grok_4_3  = max(0, grok_4_3_w.remaining) if grok_4_3_w is not None else -1,
         quota_console   = max(0, console_w.remaining)   if console_w  is not None else -1,
+        quota_image_pro = image_pro_w.remaining,
+        quota_image_edit = image_edit_w.remaining,
+        quota_video = video_w.remaining,
+        quota_video_720p = video_720p_w.remaining,
         total_auto      = _total(qs.auto),
         total_fast      = _total(qs.fast),
         total_expert    = _total(qs.expert),
         total_heavy     = _total(heavy_w),
         total_grok_4_3  = _total(grok_4_3_w),
         total_console   = _total(console_w),
+        total_image_pro = _total(image_pro_w),
+        total_image_edit = _total(image_edit_w),
+        total_video = _total(video_w),
+        total_video_720p = _total(video_720p_w),
         window_auto     = _window_s(qs.auto),
         window_fast     = _window_s(qs.fast),
         window_expert   = _window_s(qs.expert),
         window_heavy    = _window_s(heavy_w),
         window_grok_4_3 = _window_s(grok_4_3_w),
         window_console  = _window_s(console_w),
+        window_image_pro = _window_s(image_pro_w),
+        window_image_edit = _window_s(image_edit_w),
+        window_video = _window_s(video_w),
+        window_video_720p = _window_s(video_720p_w),
         reset_auto      = _reset_s(qs.auto),
         reset_fast      = _reset_s(qs.fast),
         reset_expert    = _reset_s(qs.expert),
         reset_heavy     = _reset_s(heavy_w)    if heavy_w    is not None else 0,
         reset_grok_4_3  = _reset_s(grok_4_3_w) if grok_4_3_w is not None else 0,
         reset_console   = _reset_s(console_w)  if console_w  is not None else 0,
+        reset_image_pro = _reset_s(image_pro_w),
+        reset_image_edit = _reset_s(image_edit_w),
+        reset_video = _reset_s(video_w),
+        reset_video_720p = _reset_s(video_720p_w),
         health          = 1.0,
         last_use_s      = ms_to_s(record.last_use_at)  if record.last_use_at  else 0,
         last_fail_s     = ms_to_s(record.last_fail_at) if record.last_fail_at else 0,

@@ -12,11 +12,26 @@ from .spec import ModelSpec
 MODELS: tuple[ModelSpec, ...] = (
     # === Chat ==============================================================
 
+    ModelSpec("grok-chat-fast",                             ModeId.FAST,   Tier.BASIC, Capability.CHAT, True, "Grok Chat Fast"),
+    ModelSpec("grok-chat-auto",                             ModeId.AUTO,   Tier.SUPER, Capability.CHAT, True, "Grok Chat Auto"),
+    ModelSpec("grok-chat-expert",                           ModeId.EXPERT, Tier.SUPER, Capability.CHAT, True, "Grok Chat Expert"),
+    ModelSpec("grok-chat-heavy",                            ModeId.HEAVY,  Tier.HEAVY, Capability.CHAT, True, "Grok Chat Heavy"),
+    ModelSpec(
+        "grok-composer-2.5-fast",
+        ModeId.FAST,
+        Tier.BASIC,
+        Capability.CHAT,
+        True,
+        "Grok Composer 2.5 Fast",
+        supported_in_api=False,
+        availability_note="Requires the remote Build OAuth provider; no local Build gateway is available.",
+    ),
+
     # Basic fast; auto/expert require Super+
     ModelSpec("grok-4.20-0309-non-reasoning",           ModeId.FAST,     Tier.BASIC, Capability.CHAT,       True, "Grok 4.20 0309 Non-Reasoning"),
     ModelSpec("grok-4.20-0309",                         ModeId.AUTO,     Tier.SUPER, Capability.CHAT,       True, "Grok 4.20 0309"),
     ModelSpec("grok-4.20-0309-reasoning",               ModeId.EXPERT,   Tier.SUPER, Capability.CHAT,       True, "Grok 4.20 0309 Reasoning"),
-    # Super+
+    # Basic+
     ModelSpec("grok-4.20-0309-non-reasoning-super",     ModeId.FAST,     Tier.SUPER, Capability.CHAT,       True, "Grok 4.20 0309 Non-Reasoning Super"),
     ModelSpec("grok-4.20-0309-super",                   ModeId.AUTO,     Tier.SUPER, Capability.CHAT,       True, "Grok 4.20 0309 Super"),
     ModelSpec("grok-4.20-0309-reasoning-super",         ModeId.EXPERT,   Tier.SUPER, Capability.CHAT,       True, "Grok 4.20 0309 Reasoning Super"),
@@ -47,8 +62,8 @@ MODELS: tuple[ModelSpec, ...] = (
 
     # === Image Edit =========================================================
 
-    # Super+
-    ModelSpec("grok-imagine-image-edit",                ModeId.AUTO,     Tier.SUPER, Capability.IMAGE_EDIT, True, "Grok Imagine Image Edit"),
+    # Basic+
+    ModelSpec("grok-imagine-image-edit",                ModeId.AUTO,     Tier.BASIC, Capability.IMAGE_EDIT, True, "Grok Imagine Image Edit"),
 
     # === Video ==============================================================
 
@@ -58,10 +73,21 @@ MODELS: tuple[ModelSpec, ...] = (
     # === Console Chat (console.x.ai/v1/responses) ===========================
     # 通过 console.x.ai 路由，使用 grok.com SSO token，免费账号可用
     # basic pool 即可（不消耗 grok.com 配额，走 console API 独立配额）
+    ModelSpec("grok-4.3",                               ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.3 (Console)"),
     ModelSpec("grok-4.3-console",                       ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.3 (Console)"),
     ModelSpec("grok-4.3-low",                           ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.3 Low Thinking"),
     ModelSpec("grok-4.3-medium",                        ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.3 Medium Thinking"),
     ModelSpec("grok-4.3-high",                          ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.3 High Thinking"),
+    ModelSpec("grok-4.5",                               ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.5 (Console)"),
+    ModelSpec("grok-4.5-console",                       ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.5 (Console Compatibility)"),
+    ModelSpec("grok-4.5-low",                           ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.5 Low Thinking"),
+    ModelSpec("grok-4.5-medium",                        ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.5 Medium Thinking"),
+    ModelSpec("grok-4.5-high",                          ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.5 High Thinking"),
+    ModelSpec("grok-4.6",                               ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.6 (Console)"),
+    ModelSpec("grok-4.6-low",                           ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.6 Low Thinking"),
+    ModelSpec("grok-4.6-medium",                        ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.6 Medium Thinking"),
+    ModelSpec("grok-4.6-high",                          ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.6 High Thinking"),
+    ModelSpec("grok-4.6-xhigh",                         ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.6 XHigh Thinking"),
     ModelSpec("grok-4.20-0309-reasoning-console",       ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 0309 Reasoning (Console)"),
     ModelSpec("grok-4.20-0309-console",                 ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 0309 (Console)"),
     ModelSpec("grok-4.20-multi-agent-console",          ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 Multi-Agent (Console)"),
@@ -70,7 +96,20 @@ MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("grok-4.20-multi-agent-high",             ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 Multi-Agent High"),
     ModelSpec("grok-4.20-multi-agent-xhigh",            ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 Multi-Agent XHigh"),
     ModelSpec("grok-4.20-0309-non-reasoning-console",   ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok 4.20 0309 Non-Reasoning (Console)"),
+    ModelSpec("grok-build-0.1",                         ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok Build 0.1 (Console)"),
     ModelSpec("grok-build-console",                     ModeId.CONSOLE,  Tier.BASIC, Capability.CONSOLE_CHAT, True, "Grok Build 0.1 (Console)"),
+
+    # === Console Media Catalog ==============================================
+    # These IDs are present in the remote Console catalog and have local
+    # media/audio gateway entry points.
+    ModelSpec("grok-imagine-image-quality",             ModeId.CONSOLE,  Tier.BASIC, Capability.IMAGE | Capability.IMAGE_EDIT, True, "Grok Imagine Image Quality"),
+    ModelSpec("grok-imagine-image-2.0",                 ModeId.CONSOLE,  Tier.BASIC, Capability.IMAGE | Capability.IMAGE_EDIT, True, "Grok Imagine Image 2.0"),
+    ModelSpec("grok-imagine-image-quality-2.0",         ModeId.CONSOLE,  Tier.BASIC, Capability.IMAGE | Capability.IMAGE_EDIT, True, "Grok Imagine Image Quality 2.0"),
+    ModelSpec("grok-imagine-video-1.5",                 ModeId.CONSOLE,  Tier.BASIC, Capability.VIDEO, True, "Grok Imagine Video 1.5"),
+    ModelSpec("grok-voice-latest",                     ModeId.CONSOLE,  Tier.BASIC, Capability.VOICE | Capability.TTS | Capability.REALTIME, True, "Grok Voice Latest"),
+    ModelSpec("grok-voice-think-fast-2.0",              ModeId.CONSOLE,  Tier.BASIC, Capability.VOICE | Capability.TTS | Capability.REALTIME, True, "Grok Voice Think Fast 2.0"),
+    ModelSpec("grok-voice-think-fast-1.0",              ModeId.CONSOLE,  Tier.BASIC, Capability.VOICE | Capability.TTS | Capability.REALTIME, True, "Grok Voice Think Fast 1.0"),
+    ModelSpec("grok-stt",                               ModeId.CONSOLE,  Tier.BASIC, Capability.VOICE | Capability.STT, True, "Grok Speech To Text"),
 )
 # fmt: on
 

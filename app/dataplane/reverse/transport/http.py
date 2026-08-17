@@ -4,6 +4,7 @@ Wraps curl_cffi AsyncSession; handles proxy selection, header building,
 retry-on-reset, and timeout.
 """
 
+from collections.abc import Callable
 from typing import AsyncGenerator
 
 from app.platform.logging.logger import logger
@@ -234,6 +235,7 @@ async def get_bytes_stream(
     origin: str = "https://assets.grok.com",
     referer: str = "https://grok.com/",
     extra_headers: dict | None = None,
+    url_validator: Callable[[str], bool] | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """GET *url* and yield raw bytes chunks from the streaming response.
 
@@ -262,6 +264,12 @@ async def get_bytes_stream(
             stream=True,
             allow_redirects=True,
         )
+        if url_validator is not None and not url_validator(str(response.url)):
+            await session.close()
+            raise UpstreamError(
+                "Upstream asset redirect URL is not trusted",
+                status=502,
+            )
         if response.status_code != 200:
             try:
                 body = (response.content).decode("utf-8", "replace")[:400]

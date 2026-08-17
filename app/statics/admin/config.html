@@ -624,6 +624,7 @@ const SCHEMA_DEF = [
               { value: 'none', label: '关闭', labelKey: 'config.schema.options.clearanceMode.none' },
               { value: 'manual', label: '手动', labelKey: 'config.schema.options.clearanceMode.manual' },
               { value: 'flaresolverr', label: 'FlareSolverr', labelKey: 'config.schema.options.clearanceMode.flaresolverr' },
+              { value: 'on_demand', label: '按需刷新', labelKey: 'config.schema.options.clearanceMode.onDemand' },
             ],
             desc: '控制 Cloudflare Clearance 的获取方式。',
             descKey: 'config.schema.fields.clearanceMode.desc',
@@ -635,7 +636,7 @@ const SCHEMA_DEF = [
             type: 'text',
             desc: 'curl_cffi 浏览器指纹标识，需与 Cloudflare 期望的 JA3 指纹匹配，例如 chrome136。',
             descKey: 'config.schema.fields.browserFingerprint.desc',
-            showIf: { path: 'proxy.clearance.mode', values: ['manual', 'flaresolverr'] },
+            showIf: { path: 'proxy.clearance.mode', values: ['manual', 'flaresolverr', 'on_demand'] },
           },
           {
             key: 'user_agent',
@@ -665,7 +666,7 @@ const SCHEMA_DEF = [
             wide: true,
             desc: 'FlareSolverr 实例的 HTTP 服务地址。',
             descKey: 'config.schema.fields.flaresolverrUrl.desc',
-            showIf: { path: 'proxy.clearance.mode', values: ['flaresolverr'] },
+            showIf: { path: 'proxy.clearance.mode', values: ['flaresolverr', 'on_demand'] },
           },
           {
             key: 'timeout_sec',
@@ -674,7 +675,7 @@ const SCHEMA_DEF = [
             type: 'number',
             desc: 'FlareSolverr 完成 Cloudflare 挑战允许的最长等待时长。',
             descKey: 'config.schema.fields.challengeTimeout.desc',
-            showIf: { path: 'proxy.clearance.mode', values: ['flaresolverr'] },
+            showIf: { path: 'proxy.clearance.mode', values: ['flaresolverr', 'on_demand'] },
           },
           {
             key: 'refresh_interval',
@@ -705,6 +706,7 @@ const SCHEMA_DEF = [
         section: 'chat',
         fields: [
           { key: 'timeout', section: 'chat', label: '对话请求超时（秒）', labelKey: 'config.schema.fields.chatTimeout.label', type: 'number', desc: '对话与图像编辑请求的 HTTP 连接超时时间。', descKey: 'config.schema.fields.chatTimeout.desc' },
+          { key: 'stream_idle_timeout', section: 'chat', label: '对话流式空闲超时（秒）', type: 'number', desc: '连续没有语义生成事件时，终止卡住的对话流。' },
           { key: 'timeout', section: 'image', label: '图像请求超时（秒）', labelKey: 'config.schema.fields.imageTimeout.label', type: 'number', desc: '图像生成 WebSocket 请求的总超时时间。', descKey: 'config.schema.fields.imageTimeout.desc' },
           { key: 'stream_timeout', section: 'image', label: '图像流式空闲超时（秒）', type: 'number', desc: '图像生成 WebSocket 在流式接收阶段允许的最长连续空闲等待时长。' },
           { key: 'timeout', section: 'video', label: '视频请求超时（秒）', labelKey: 'config.schema.fields.videoTimeout.label', type: 'number', desc: '视频生成请求的统一超时时间。', descKey: 'config.schema.fields.videoTimeout.desc' },

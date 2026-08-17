@@ -19,6 +19,7 @@ from typing import Literal
 
 from app.platform.config.snapshot import get_config
 from .table import AccountRuntimeTable
+from ..shared.enums import IMAGINE_QUOTA_MODE_IDS
 
 # Scoring weights used by the quota strategy.
 _W_HEALTH   = 100.0
@@ -76,6 +77,7 @@ def select(
     if _STRATEGY_NAME == "random":
         return _random_select(
             table, pool_id,
+            mode_id=mode_id,
             exclude_idxs=exclude_idxs,
             prefer_tag_idxs=prefer_tag_idxs,
             now_s=now_s,
@@ -150,9 +152,13 @@ def _quota_select(
     # B3: inflight 硬上限过滤，避免单账号堆积导致上游风控
     working = {
         idx for idx in working
-        if int(quota_col[idx]) > 0
-        and int(inflight_col[idx]) < _QUOTA_MAX_INFLIGHT
+        if int(inflight_col[idx]) < _QUOTA_MAX_INFLIGHT
     }
+    if mode_id in IMAGINE_QUOTA_MODE_IDS:
+        known = {idx for idx in working if int(quota_col[idx]) > 0}
+        working = known or {idx for idx in working if int(quota_col[idx]) < 0}
+    else:
+        working = {idx for idx in working if int(quota_col[idx]) > 0}
     if not working:
         return None
 
@@ -160,7 +166,13 @@ def _quota_select(
         preferred = working & prefer_tag_idxs
         working = preferred if preferred else working
 
-    return _best(table, working, quota_col, now_s)
+    return _best(
+        table,
+        working,
+        quota_col,
+        now_s,
+        allow_unknown=mode_id in IMAGINE_QUOTA_MODE_IDS,
+    )
 
 
 def _quota_select_any(
@@ -223,6 +235,8 @@ def _best(
     working: set[int],
     quota_col: "array.array",
     now_s: int,
+    *,
+    allow_unknown: bool = False,
 ) -> int | None:
     best_idx   = -1
     best_score = -1e18
@@ -234,7 +248,7 @@ def _best(
 
     for idx in working:
         quota = int(quota_col[idx])
-        if quota <= 0:
+        if quota <= 0 and not (allow_unknown and quota < 0):
             continue
         health   = float(health_col[idx])
         inflight = int(inflight_col[idx])
@@ -243,7 +257,7 @@ def _best(
 
         score = (
             health   * _W_HEALTH
-            + quota  * _W_QUOTA
+            + max(0, quota) * _W_QUOTA
             - inflight * _W_INFLIGHT
             - fails  * _W_FAIL
         )
@@ -300,10 +314,18 @@ def _random_select(
     table: AccountRuntimeTable,
     pool_id: int,
     *,
+    mode_id: int | None = None,
     exclude_idxs: frozenset[int] | None,
     prefer_tag_idxs: set[int] | None,
     now_s: int,
 ) -> int | None:
+    if mode_id in IMAGINE_QUOTA_MODE_IDS:
+        return _quota_select(
+            table, pool_id, mode_id,
+            exclude_idxs=exclude_idxs,
+            prefer_tag_idxs=prefer_tag_idxs,
+            now_s=now_s,
+        )
     candidates: set[int] = _pool_union(table, pool_id)
     if not candidates:
         return None

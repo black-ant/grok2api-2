@@ -16,6 +16,9 @@ class MessageItem(BaseModel):
 class ImageConfig(BaseModel):
     n:               int | None = Field(1, ge=1, le=10)
     size:            str | None = "1024x1024"
+    aspect_ratio:    str | None = None
+    resolution:      str | None = None
+    quality:         str | None = None
     response_format: str | None = None
 
 
@@ -46,17 +49,48 @@ class ImageGenerationRequest(BaseModel):
     prompt:          str
     n:               int | None = Field(1, ge=1, le=10)
     size:            str | None = "1024x1024"
+    aspect_ratio:    str | None = None
+    resolution:      str | None = None
+    quality:         str | None = None
     response_format: str | None = "url"
+    stream:          bool | None = False
+    partial_images:  int | None = Field(None, ge=0, le=4)
+
+
+class VideoMediaInput(BaseModel):
+    """JSON media reference used by the video compatibility routes."""
+
+    url:     str | None = None
+    file_id: str | None = None
+
+
+class VideoGenerationRequest(BaseModel):
+    """JSON video request shared by the generation-compatible route."""
+
+    model:            str = "grok-imagine-video"
+    prompt:           str
+    duration:         int | None = None
+    aspect_ratio:     str | None = None
+    resolution:       str | None = None
+    image:            VideoMediaInput | None = None
+    reference_images: list[VideoMediaInput] | None = None
+    reference_audios: list[dict[str, Any]] | None = None
+    video:            VideoMediaInput | None = None
 
 
 class ImageEditRequest(BaseModel):
     model:           str
     prompt:          str
-    image:           str | list[str]
-    mask:            str | None = None
-    n:               int | None = Field(1, ge=1, le=2)
+    image:           str | list[str] | dict[str, Any] | list[dict[str, Any]]
+    mask:            str | dict[str, Any] | None = None
+    n:               int | None = Field(1, ge=1, le=10)
     size:            str | None = "1024x1024"
+    aspect_ratio:    str | None = None
+    resolution:      str | None = None
+    quality:         str | None = None
     response_format: str | None = "url"
+    stream:          bool | None = False
+    partial_images:  int | None = Field(None, ge=0, le=4)
 
 
 class ResponsesCreateRequest(BaseModel):
@@ -91,5 +125,6 @@ class ResponsesCreateRequest(BaseModel):
 __all__ = [
     "MessageItem", "ImageConfig", "VideoConfig",
     "ChatCompletionRequest", "ImageGenerationRequest", "ImageEditRequest",
+    "VideoMediaInput", "VideoGenerationRequest",
     "ResponsesCreateRequest",
 ]

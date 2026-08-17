@@ -27,6 +27,7 @@ class ClearanceMode(StrEnum):
     NONE         = "none"         # no CF clearance required
     MANUAL       = "manual"       # operator-supplied cf_cookies
     FLARESOLVERR = "flaresolverr" # maintained by FlareSolverr
+    ON_DEMAND    = "on_demand"    # solve only after a challenge invalidates a bundle
 
     @classmethod
     def parse(cls, value: str | Self) -> Self:

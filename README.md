@@ -244,6 +244,10 @@ basic表示free账号，spuer和heavy 为付费
 | 模型名 | mode | 账号等级 | 备注 |
 | :-- | :-- | :-- | :-- |
 | `grok-4.20-fast` / `grok-4.3-fast` | fast | basic（优先高等级） | 
+| `grok-chat-fast` | fast | basic |
+| `grok-chat-auto` | auto | super |
+| `grok-chat-expert` | expert | super |
+| `grok-chat-heavy` | heavy | heavy |
 | `grok-4.20-auto` | auto | super | 
 | `grok-4.20-expert` | expert | super | 
 | `grok-4.20-heavy` | heavy | heavy | |
@@ -259,16 +263,27 @@ basic表示free账号，spuer和heavy 为付费
 | `grok-4.20-0309-heavy` | auto | heavy |
 | `grok-4.20-0309-reasoning-heavy` | expert | heavy |
 
+`grok-composer-2.5-fast` 也会出现在模型目录，但依赖远程 Build OAuth provider；本地暂未提供对应网关，因此返回 `supported_in_api=false`，请求不会被伪造转发。
+
 ### Chat（ console.x.ai）
 
 通过 SSO Token 免费访问，不消耗付费额度。所有免费模型使用 **basic** 等级账号。
 
 | 模型名 | reasoning effort | 账号等级 |
 | :-- | :-- | :-- |
-| `grok-4.3-console` | 用户传入（默认 medium） | basic |
+| `grok-4.3` / `grok-4.3-console` | 用户传入（默认 medium） | basic |
 | `grok-4.3-low` | low（固定） | basic |
 | `grok-4.3-medium` | medium（固定） | basic |
 | `grok-4.3-high` | high（固定） | basic |
+| `grok-4.5` / `grok-4.5-console` | 用户传入（默认 medium） | basic |
+| `grok-4.5-low` | low（固定） | basic |
+| `grok-4.5-medium` | medium（固定） | basic |
+| `grok-4.5-high` | high（固定） | basic |
+| `grok-4.6` | 用户传入（默认 medium） | basic |
+| `grok-4.6-low` | low（固定） | basic |
+| `grok-4.6-medium` | medium（固定） | basic |
+| `grok-4.6-high` | high（固定） | basic |
+| `grok-4.6-xhigh` | xhigh（固定） | basic |
 | `grok-4.20-0309-console` | 默认 | basic |
 | `grok-4.20-0309-reasoning-console` | 固定 reasoning | basic |
 | `grok-4.20-0309-non-reasoning-console` | 无 reasoning | basic |
@@ -277,6 +292,7 @@ basic表示free账号，spuer和heavy 为付费
 | `grok-4.20-multi-agent-medium` | medium（固定）→ 4 agents | basic|
 | `grok-4.20-multi-agent-high` | high（固定）→ 16 agents | basic |
 | `grok-4.20-multi-agent-xhigh` | xhigh（固定）→ 16 agents | basic|
+| `grok-build-0.1` / `grok-build-console` | 无可配置 reasoning | basic |
 | `grok-build-console` | 默认 | basic |
 
 **Console 配额**：30 次 / 15 分钟窗口，采用延迟恢复轮换策略（消耗至剩余 15 次时启动计时器，评分机制自动轮换到其他账号）。后台每 30 秒巡检并自动重置过期配额。
@@ -287,8 +303,21 @@ basic表示free账号，spuer和heavy 为付费
 | :-- | :-- | :-- |
 | `grok-imagine-image-lite` | 文生图 | basic |
 | `grok-imagine-image` / `image-pro` | 文生图 | super |
-| `grok-imagine-image-edit` | 图像编辑 | super |
+| `grok-imagine-image-edit` | 图像编辑 | basic |
 | `grok-imagine-video` | 文生视频 | super |
+
+### Console Media / Audio catalog
+
+以下远程 Console 模型名已纳入本地 registry 和对应网关，`/v1/models` 返回 `supported_in_api=true`：
+
+| 模型名 | 能力 | 当前状态 |
+| :-- | :-- | :-- |
+| `grok-imagine-image-quality` / `grok-imagine-image-2.0` / `grok-imagine-image-quality-2.0` | 图片/图片编辑 | `/v1/images/generations`、`/v1/images/edits`；`quality-2.0` 兼容名映射到远程 quality 模型 |
+| `grok-imagine-video-1.5` | 视频 | `/v1/videos` 创建、状态查询和本地内容缓存 |
+| `grok-voice-latest` / `grok-voice-think-fast-1.0` / `grok-voice-think-fast-2.0` | TTS/Realtime | `/v1/tts`、`/v1/audio/speech`、`/v1/audio/tasks`、`/v1/tts/voices`、`/v1/realtime` |
+| `grok-stt` | STT | `/v1/stt`、`/v1/audio/transcriptions` |
+
+上游真实账号联调尚未在本地完成；已确认的是本地模型解析、请求字段校验、DPoP、账号选择、错误反馈和安全下载边界。
 
 ---
 
@@ -316,14 +345,19 @@ basic表示free账号，spuer和heavy 为付费
 
 | 端点 | 说明 |
 | :-- | :-- |
+| `GET /healthz` / `GET /readyz` | 存活 / 就绪检查 |
 | `GET /v1/models` | 列出可用模型 |
+| `GET /v1/models/{id}` | 查询单个可用模型 |
+| `GET /v1/models?client_version=...` | Codex 兼容模型目录，支持 `ETag` |
 | `POST /v1/chat/completions` | 聊天 / 图像 / 视频统一入口 |
 | `POST /v1/responses` | OpenAI Responses API |
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/images/generations` | 图像生成 |
-| `POST /v1/images/edits` | 图像编辑 |
+| `POST /v1/images/edits` | 图像编辑，支持 multipart 或 JSON URL/data URI 输入 |
 | `POST /v1/videos` | 异步视频任务 |
+| `POST /v1/videos/generations` | JSON 视频生成兼容入口 |
 | `GET /v1/videos/{id}` / `{id}/content` | 查询 / 下载视频 |
+| `GET /v1/media/images/{id}` / `/v1/media/videos/{id}` | 本地归档媒体兼容入口 |
 
 ---
 
@@ -380,7 +414,7 @@ curl http://localhost:8000/v1/chat/completions \
 | :-- | :-- |
 | Admin 打不开 | 确认端口映射和防火墙：`docker compose ps` |
 | 图片/视频链接 403 | 设置 `app.app_url` 为公网地址（含 `https://`） |
-| Cloudflare 拦截 | 更换代理，或者切换防封版部署，再或者手动配置 `proxy.clearance.mode` |
+| Cloudflare 拦截 | 更换代理，或者配置 `proxy.clearance.mode = "on_demand"` 并提供 FlareSolverr 地址 |
 | 多 Worker 冲突 | 无冲突，调度器通过文件锁选举 leader |
 
 ---

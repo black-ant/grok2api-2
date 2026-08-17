@@ -10,7 +10,7 @@ import orjson
 
 from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
-from app.platform.errors import RateLimitError, UpstreamError, ValidationError, parse_retry_after
+from app.platform.errors import RateLimitError, StreamIdleTimeout, UpstreamError, ValidationError, parse_retry_after
 from app.platform.runtime.clock import now_s
 from app.platform.storage import save_local_image
 from app.platform.tokens import (
@@ -46,6 +46,10 @@ from app.dataplane.reverse.protocol.xai_chat import (
 from app.dataplane.reverse.protocol.xai_usage import is_invalid_credentials_error
 from app.dataplane.reverse.runtime.endpoint_table import CHAT
 from app.dataplane.reverse.transport.asset_upload import upload_from_input
+from app.dataplane.reverse.transport.semantic_idle import (
+    is_chat_stream_activity,
+    with_semantic_idle_timeout,
+)
 from app.dataplane.reverse.protocol.tool_prompt import (
     build_tool_system_prompt,
     extract_tool_names,
@@ -483,9 +487,18 @@ async def _stream_chat(
                 ),
             )
 
+        stream_idle_timeout_s = get_config().get_float(
+            "chat.stream_idle_timeout", timeout_s
+        )
         try:
-            async for line in response.aiter_lines():
+            async for line in with_semantic_idle_timeout(
+                response.aiter_lines(),
+                stream_idle_timeout_s,
+                is_chat_stream_activity,
+            ):
                 yield line
+        except StreamIdleTimeout:
+            raise
         except Exception as exc:
             raise _transport_upstream_error(
                 exc, context="Chat stream read failed"
@@ -498,6 +511,7 @@ async def completions(
     messages: list[dict],
     stream: bool | None = None,
     emit_think: bool | None = None,
+    reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
     tool_choice: Any = None,
     temperature: float = 0.8,
@@ -535,6 +549,7 @@ async def completions(
             messages=messages,
             stream=is_stream,
             emit_think=emit_think,
+            reasoning_effort=reasoning_effort,
             temperature=temperature,
             top_p=top_p,
             force_token=force_token,

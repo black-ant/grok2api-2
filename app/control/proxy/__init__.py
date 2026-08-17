@@ -16,6 +16,7 @@ from .config import resolve_clearance_config
 from .models import (
     EgressMode,
     ClearanceMode,
+    ClearanceBundleState,
     EgressNode,
     ClearanceBundle,
     ProxyLease,
@@ -47,9 +48,9 @@ class ProxyDirectory:
         self._resource_nodes: list[EgressNode] = []  # for media downloads
         self._bundles: dict[BundleKey, ClearanceBundle] = {}
         self._lock = asyncio.Lock()
-        # Single-flight guard: at most one FlareSolverr call per proxy+host key.
-        # Other coroutines wait on the Event until the active refresh completes.
-        self._refresh_events: dict[BundleKey, asyncio.Event] = {}
+        # Single-flight guard: at most one clearance provider call per
+        # proxy+host key. Other coroutines await the same task result.
+        self._refresh_tasks: dict[BundleKey, asyncio.Task[ClearanceBundle | None]] = {}
         self._manual = ManualClearanceProvider()
         self._flare = FlareSolverrClearanceProvider()
         self._egress_mode: EgressMode = EgressMode.DIRECT
@@ -128,10 +129,10 @@ class ProxyDirectory:
                 for key, bundle in self._bundles.items()
                 if key[0] in valid_affinities
             }
-            self._refresh_events = {
-                key: event
-                for key, event in self._refresh_events.items()
-                if key[0] in valid_affinities
+            self._refresh_tasks = {
+                key: task
+                for key, task in self._refresh_tasks.items()
+                if key[0] in valid_affinities and not task.done()
             }
             self._config_sig = config_sig
 
@@ -189,12 +190,20 @@ class ProxyDirectory:
             # Invalidate associated clearance bundle.
             key = (lease.proxy_url or "direct", lease.clearance_host)
             async with self._lock:
-                from .models import ClearanceBundleState
-
                 bundle = self._bundles.get(key)
                 if bundle:
                     self._bundles[key] = bundle.model_copy(
                         update={"state": ClearanceBundleState.INVALID}
+                    )
+                elif self._clearance_mode != ClearanceMode.NONE:
+                    # Keep a per-affinity marker so on-demand mode knows that
+                    # the next acquire must solve instead of returning empty
+                    # clearance again.
+                    self._bundles[key] = ClearanceBundle(
+                        bundle_id=f"invalid:{next_hex()}",
+                        state=ClearanceBundleState.INVALID,
+                        affinity_key=key[0],
+                        clearance_host=key[1],
                     )
 
         # In PROXY_POOL mode, rotate to the next node on any failure so the
@@ -254,42 +263,68 @@ class ProxyDirectory:
         clearance_host = _clearance_host(clearance_origin)
         key: BundleKey = (affinity_key, clearance_host)
 
-        # Single-flight: only one coroutine fetches clearance per proxy+host key.
-        # Concurrent callers wait on the Event and retry once it fires.
-        while True:
-            async with self._lock:
-                bundle = self._bundles.get(key)
-                if bundle and bundle.state.value == 0:  # VALID
-                    return bundle
-                event = self._refresh_events.get(key)
-                if event is None:
-                    # This coroutine wins the right to refresh.
-                    event = asyncio.Event()
-                    self._refresh_events[key] = event
-                    break
-            # Another coroutine is already refreshing — wait for it, then retry.
-            await event.wait()
+        async with self._lock:
+            bundle = self._bundles.get(key)
+            if bundle and bundle.state == ClearanceBundleState.VALID:
+                return bundle
+            if self._clearance_mode == ClearanceMode.ON_DEMAND and bundle is None:
+                # Do not block the first request on FlareSolverr. A challenge
+                # feedback creates an INVALID marker, which enables the next
+                # acquire to perform the first solve on demand.
+                return None
+            task = self._refresh_tasks.get(key)
+            if task is None or task.done():
+                task = asyncio.create_task(
+                    self._refresh_bundle(
+                        key=key,
+                        affinity_key=affinity_key,
+                        proxy_url=proxy_url,
+                        clearance_host=clearance_host,
+                        clearance_origin=clearance_origin,
+                    ),
+                    name=f"clearance-refresh:{affinity_key}:{clearance_host}",
+                )
+                self._refresh_tasks[key] = task
 
         try:
-            if self._clearance_mode == ClearanceMode.MANUAL:
-                bundle = self._manual.build_bundle(
-                    affinity_key=affinity_key,
-                    clearance_host=clearance_host,
-                )
-            else:
-                bundle = await self._flare.refresh_bundle(
-                    affinity_key=affinity_key,
-                    proxy_url=proxy_url,
-                    target_url=clearance_origin,
-                )
-            if bundle:
-                async with self._lock:
-                    self._bundles[key] = bundle
-            return bundle
+            return await asyncio.shield(task)
         finally:
+            if task.done():
+                async with self._lock:
+                    if self._refresh_tasks.get(key) is task:
+                        self._refresh_tasks.pop(key, None)
+
+    async def _refresh_bundle(
+        self,
+        *,
+        key: BundleKey,
+        affinity_key: str,
+        proxy_url: str,
+        clearance_host: str,
+        clearance_origin: str,
+    ) -> ClearanceBundle | None:
+        if self._clearance_mode == ClearanceMode.MANUAL:
+            bundle = self._manual.build_bundle(
+                affinity_key=affinity_key,
+                clearance_host=clearance_host,
+            )
+        elif self._clearance_mode in {
+            ClearanceMode.FLARESOLVERR,
+            ClearanceMode.ON_DEMAND,
+        }:
+            bundle = await self._flare.refresh_bundle(
+                affinity_key=affinity_key,
+                proxy_url=proxy_url,
+                target_url=clearance_origin,
+            )
+        else:
+            bundle = None
+
+        if bundle:
+            bundle = bundle.model_copy(update={"last_refresh_at": now_ms()})
             async with self._lock:
-                self._refresh_events.pop(key, None)
-            event.set()  # Wake all waiters so they retry with the new bundle.
+                self._bundles[key] = bundle
+        return bundle
 
     # ------------------------------------------------------------------
     # Clearance lifecycle helpers (used by ProxyClearanceScheduler)
@@ -316,7 +351,10 @@ class ProxyDirectory:
         Called once at startup so the first real request does not have to wait
         for FlareSolverr.  Does NOT invalidate existing bundles first.
         """
-        if self._clearance_mode == ClearanceMode.NONE:
+        if self._clearance_mode in {
+            ClearanceMode.NONE,
+            ClearanceMode.ON_DEMAND,
+        }:
             return
         async with self._lock:
             nodes = list(self._nodes)
@@ -340,7 +378,7 @@ class ProxyDirectory:
         temporarily unavailable the old bundle remains valid and continues to
         serve requests.
         """
-        if self._clearance_mode == ClearanceMode.NONE:
+        if self._clearance_mode != ClearanceMode.FLARESOLVERR:
             return
         async with self._lock:
             nodes = list(self._nodes)

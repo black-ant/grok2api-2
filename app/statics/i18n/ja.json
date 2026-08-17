@@ -381,7 +381,8 @@
         "clearanceMode": {
           "none": "無効",
           "manual": "手動",
-          "flaresolverr": "FlareSolverr"
+          "flaresolverr": "FlareSolverr",
+          "onDemand": "オンデマンド"
         }
       },
       "fields": {

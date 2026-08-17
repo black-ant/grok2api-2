@@ -233,10 +233,17 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(stats["pool_events"][0]["to_pool"], "stable")
 
     def test_configured_default_models_exist(self):
+        self.assertIsNotNone(registry.get("grok-4.3"))
         self.assertIsNotNone(registry.get("grok-4.3-console"))
+        self.assertIsNotNone(registry.get("grok-4.5"))
+        self.assertIsNotNone(registry.get("grok-4.5-console"))
+        self.assertIsNotNone(registry.get("grok-4.5-high"))
+        self.assertIsNotNone(registry.get("grok-4.6"))
+        self.assertIsNotNone(registry.get("grok-4.6-xhigh"))
         self.assertIsNotNone(registry.get("grok-4.20-0309-console"))
         self.assertIsNotNone(registry.get("grok-4.20-auto"))
         self.assertIsNotNone(registry.get("grok-4.3-beta"))
+        self.assertIsNotNone(registry.get("grok-build-0.1"))
 
 
 if __name__ == "__main__":

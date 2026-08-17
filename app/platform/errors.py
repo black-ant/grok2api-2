@@ -107,12 +107,13 @@ class UpstreamError(AppError):
         self.retry_after_s = retry_after_s
 
 
-class StreamIdleTimeout(AppError):
+class StreamIdleTimeout(UpstreamError):
     def __init__(self, timeout_s: float) -> None:
         super().__init__(
             f"Stream idle timeout after {timeout_s}s",
-            kind=ErrorKind.UPSTREAM, code="stream_idle_timeout", status=504,
+            status=504,
         )
+        self.code = "stream_idle_timeout"
 
 
 __all__ = [
