@@ -317,7 +317,6 @@ class LocalAccountRepository:
             if row is None:
                 continue
             record = self._row_to_record(row)
-            qs = record.quota_set()
 
             sets: dict[str, Any] = {"updated_at": ts, "revision": revision}
 
