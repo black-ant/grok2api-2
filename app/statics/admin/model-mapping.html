@@ -76,6 +76,7 @@
       <span class="status" id="status">加载中…</span>
       <button class="btn-line" id="models-btn" type="button">可用模型</button>
       <button class="btn-line" id="reset-btn" type="button" disabled>重置</button>
+      <button class="btn-line" id="clear-btn" type="button">清空</button>
       <button class="btn-primary" id="save-btn" type="button" disabled>保存</button>
     </div>
   </div>
@@ -315,6 +316,21 @@ async function saveMapping() {
   window.showToast?.('模型映射已保存', 'success');
 }
 
+async function clearMapping() {
+  if (!window.confirm('确定清空 FREE / SUPER 的全部模型映射吗？')) return;
+  const aliases = normalizeAliases({});
+  setStatus('清空中…');
+  await apiFetch('/model-mapping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ models: { aliases } }),
+  });
+  savedAliases = normalizeAliases(aliases);
+  draftAliases = normalizeAliases(aliases);
+  render();
+  window.showToast?.('模型映射已清空', 'success');
+}
+
 function waitI18n() {
   return new Promise((resolve) => window.I18n?.onReady(resolve) || resolve());
 }
@@ -336,6 +352,10 @@ function waitI18n() {
     draftAliases = normalizeAliases(savedAliases);
     render();
   });
+  document.getElementById('clear-btn').addEventListener('click', () => clearMapping().catch((error) => {
+    setStatus('清空失败');
+    window.showToast?.(`清空失败: ${error.message}`, 'error');
+  }));
   document.getElementById('models-btn').addEventListener('click', openModelsModal);
   document.querySelectorAll('[data-models-close]').forEach((node) => node.addEventListener('click', closeModelsModal));
   document.getElementById('models-modal').addEventListener('click', (event) => {
