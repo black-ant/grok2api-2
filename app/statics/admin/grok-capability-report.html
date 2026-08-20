@@ -92,6 +92,7 @@
           <thead>
             <tr>
               <th>模型</th>
+              <th>账号</th>
               <th>类型</th>
               <th>状态</th>
               <th>HTTP</th>
@@ -172,7 +173,10 @@ function renderReport() {
 
   document.getElementById('empty-card').hidden = true;
   document.getElementById('report-view').hidden = false;
-  document.getElementById('summary-token').textContent = report.token?.label || '—';
+  const reportAccounts = Array.isArray(report.accounts) ? report.accounts : [];
+  document.getElementById('summary-token').textContent = reportAccounts.length > 1
+    ? `${reportAccounts.length} 个 Key 轮换`
+    : (report.token?.label || '—');
   document.getElementById('summary-question').textContent = summaryQuestionText();
   document.getElementById('summary-status').textContent = summaryStatusText();
   document.getElementById('summary-duration').textContent = `${report.duration_ms || 0} ms`;
@@ -180,6 +184,7 @@ function renderReport() {
   document.getElementById('result-body').innerHTML = report.results.map((item) => `
     <tr>
       <td><div>${esc(item.name || item.id)}</div><div class="mono muted">${esc(item.id)}</div></td>
+      <td class="mono">${esc(item.token_tail || '—')}</td>
       <td>${esc(item.kind || 'chat')}</td>
       <td><span class="status-pill status-${esc(item.status || 'unknown')}">${esc(statusLabel(item.status))}</span></td>
       <td class="mono">${esc(item.http_status ?? '—')}</td>

@@ -181,7 +181,7 @@
 <div class="modal-overlay" id="account-modal" aria-hidden="true">
   <div class="modal account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
     <div class="batch-head">
-      <div class="modal-title" id="account-modal-title">选择 Key</div>
+      <div class="modal-title" id="account-modal-title">选择 Key（可多选）</div>
       <button type="button" class="btn btn-ghost btn-sm" data-account-close>关闭</button>
     </div>
     <div class="account-filters">
@@ -229,7 +229,7 @@
 let adminAuthKey = '';
 let accounts = [];
 let models = [];
-let selectedAccountId = '';
+let selectedAccountIds = new Set();
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
@@ -261,6 +261,14 @@ function accountMetaLabel(account) {
 function accountKeyTailLabel(account) {
   const value = String(account?.token_mask || account?.id || '').trim();
   return value ? value.slice(-6) : '—';
+}
+
+function selectedAccounts() {
+  return accounts.filter((item) => selectedAccountIds.has(item.id));
+}
+
+function primaryAccountId() {
+  return selectedAccountIds.values().next().value || '';
 }
 
 function filteredAccounts() {
@@ -319,7 +327,7 @@ function renderScanResult(report) {
   }
 
   const item = report.results[0];
-  const account = accounts.find((entry) => entry.id === selectedAccountId) || null;
+  const account = accounts.find((entry) => entry.id === primaryAccountId()) || null;
   const summary = report.summary || {};
   const total = Number(summary.total ?? report.results.length ?? 0);
   const isPass = item.status === 'available';
@@ -373,18 +381,24 @@ async function apiFetch(path, options = {}) {
 }
 
 function renderAccounts() {
-  if (!selectedAccountId && accounts.length) selectedAccountId = accounts[0].id;
-  if (selectedAccountId && !accounts.some((item) => item.id === selectedAccountId)) {
-    selectedAccountId = accounts[0]?.id || '';
-  }
-  const account = accounts.find((item) => item.id === selectedAccountId);
+  const known = new Set(accounts.map((item) => item.id));
+  [...selectedAccountIds].forEach((id) => { if (!known.has(id)) selectedAccountIds.delete(id); });
+  if (!selectedAccountIds.size && accounts.length) selectedAccountIds.add(accounts[0].id);
+  const picked = selectedAccounts();
   const display = document.getElementById('key-display');
-  display.innerHTML = account
-    ? `<div class="key-email">${esc(accountPrimaryLabel(account))}</div><div class="key-meta">${esc(accountMetaLabel(account))}</div>`
-    : '<div class="key-email">无账号</div><div class="key-meta">—</div>';
+  if (picked.length > 1) {
+    const pools = [...new Set(picked.map((item) => item.pool || 'basic'))].join('/');
+    display.innerHTML = `<div class="key-email">${picked.length} 个 Key</div><div class="key-meta">轮换检测 · ${esc(pools)}</div>`;
+  } else {
+    const account = picked[0] || null;
+    display.innerHTML = account
+      ? `<div class="key-email">${esc(accountPrimaryLabel(account))}</div><div class="key-meta">${esc(accountMetaLabel(account))}</div>`
+      : '<div class="key-email">无账号</div><div class="key-meta">—</div>';
+  }
   document.getElementById('open-account-btn').disabled = !accounts.length;
-  document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
-  document.getElementById('open-batch-btn').disabled = !selectedAccountId || !models.length;
+  const hasKeys = !!selectedAccountIds.size;
+  document.getElementById('scan-btn').disabled = !hasKeys || !models.length;
+  document.getElementById('open-batch-btn').disabled = !hasKeys || !models.length;
   renderAccountList();
 }
 
@@ -394,8 +408,8 @@ function renderModels() {
     ? models.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)} · ${esc(item.id)} · ${esc(item.kind || 'chat')}</option>`).join('')
     : '<option value="">无模型</option>';
   select.disabled = !models.length;
-  document.getElementById('scan-btn').disabled = !selectedAccountId || !models.length;
-  document.getElementById('open-batch-btn').disabled = !selectedAccountId || !models.length;
+  document.getElementById('scan-btn').disabled = !selectedAccountIds.size || !models.length;
+  document.getElementById('open-batch-btn').disabled = !selectedAccountIds.size || !models.length;
   renderBatchModels();
 }
 
@@ -404,7 +418,7 @@ function renderAccountList() {
   if (!list) return;
   const items = filteredAccounts();
   list.innerHTML = items.map((item) => `
-    <button type="button" class="account-row ${item.id === selectedAccountId ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
+    <button type="button" class="account-row ${selectedAccountIds.has(item.id) ? 'is-active' : ''}" data-account-id="${esc(item.id)}">
       <span class="account-main">
         <span class="account-email">${esc(item.email || '—')}</span>
       </span>
@@ -414,9 +428,11 @@ function renderAccountList() {
   `).join('') || '<div class="batch-status" style="padding:12px;margin:0">无匹配账号</div>';
   list.querySelectorAll('[data-account-id]').forEach((node) => {
     node.addEventListener('click', () => {
-      selectedAccountId = node.dataset.accountId || '';
+      const accountId = node.dataset.accountId || '';
+      if (!accountId) return;
+      if (selectedAccountIds.has(accountId)) selectedAccountIds.delete(accountId);
+      else selectedAccountIds.add(accountId);
       renderAccounts();
-      closeAccountModal();
     });
   });
 }
@@ -467,9 +483,10 @@ function updateBatchStatus() {
   const selectedCount = batchSelection.size;
   const passCount = batchResults.filter((item) => item.status === 'available').length;
   const doneCount = batchResults.length;
+  const keyCount = selectedAccountIds.size;
   const text = batchRunning
-    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}`
-    : `已选择 ${selectedCount} 个模型，通过 ${passCount}`;
+    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · ${keyCount} 个 Key 轮换` : ''}`
+    : `已选择 ${selectedCount} 个模型${keyCount > 1 ? ` · ${keyCount} 个 Key 轮换` : ''}，通过 ${passCount}`;
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
   document.getElementById('select-all-batch-btn').disabled = batchRunning || !models.length;
@@ -543,6 +560,7 @@ function renderBatchResults() {
           <div class="result-model" title="${esc(item.id)}">${esc(modelName)}</div>
           <div class="result-meta">${esc(item.id)} · ${esc(kind)} · ${esc(pool)}</div>
         </td>
+        <td class="mono">${esc(item.token_tail || '—')}</td>
         <td><span class="${batchPillClass(status)}">${esc(batchStatusLabel(status))}</span></td>
         <td>${esc(batchResultText(item))}</td>
         <td>
@@ -558,6 +576,7 @@ function renderBatchResults() {
       <thead>
         <tr>
           <th>模型</th>
+          <th>账号</th>
           <th>状态</th>
           <th>结果</th>
           <th>操作</th>
@@ -642,20 +661,25 @@ async function scanOneModel(tokenId, modelId) {
 }
 
 async function runBatchScan() {
-  const tokenId = selectedAccountId;
+  const tokenIds = Array.from(selectedAccountIds);
   const selectedModels = Array.from(batchSelection);
-  if (!tokenId || !selectedModels.length) return;
+  if (!tokenIds.length || !selectedModels.length) return;
 
   batchRunning = true;
   batchResults = [];
   updateBatchStatus();
   window.showToast?.('批量检测已开始', 'success');
   try {
-    for (const modelId of selectedModels) {
+    for (let index = 0; index < selectedModels.length; index++) {
+      const modelId = selectedModels[index];
+      const tokenId = tokenIds[index % tokenIds.length];
+      const account = accounts.find((item) => item.id === tokenId) || null;
       renderBatchModels(modelId);
       try {
         const report = await scanOneModel(tokenId, modelId);
         const result = report.results?.[0] || { id: modelId, status: 'unknown' };
+        result.token_id = tokenId;
+        result.token_tail = account ? accountKeyTailLabel(account) : String(tokenId).slice(-6);
         batchResults.push(result);
       } catch (error) {
         const model = models.find((item) => item.id === modelId) || { id: modelId };
@@ -666,17 +690,20 @@ async function runBatchScan() {
           status: 'unknown',
           http_status: error.status || 0,
           message: error.message,
+          token_id: tokenId,
+          token_tail: account ? accountKeyTailLabel(account) : String(tokenId).slice(-6),
         });
       }
       renderBatchModels();
     }
-    const token = accounts.find((item) => item.id === tokenId) || null;
+    const token = accounts.find((item) => item.id === tokenIds[0]) || null;
     const available = batchResults.filter((item) => item.status === 'available').length;
     const report = {
       object: 'grok_capability_report',
       started_at: Date.now(),
       duration_ms: batchResults.reduce((sum, item) => sum + Number(item.duration_ms || 0), 0),
       token,
+      accounts: tokenIds.map((id) => accounts.find((item) => item.id === id)).filter(Boolean),
       summary: { total: batchResults.length, available, failed: batchResults.length - available },
       results: batchResults,
     };
@@ -699,7 +726,7 @@ async function loadOptions() {
 }
 
 async function runScan() {
-  const tokenId = selectedAccountId;
+  const tokenId = primaryAccountId();
   const modelId = document.getElementById('model-select').value;
   if (!tokenId || !modelId) return;
 
@@ -718,7 +745,7 @@ async function runScan() {
     setStatus(`检测失败：${error.message}`);
     window.showToast?.('检测失败', 'error');
   } finally {
-    button.disabled = !selectedAccountId || !models.length;
+    button.disabled = !selectedAccountIds.size || !models.length;
   }
 }
 
