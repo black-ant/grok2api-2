@@ -271,6 +271,11 @@ function primaryAccountId() {
   return selectedAccountIds.values().next().value || '';
 }
 
+function batchTokenIds() {
+  const activeIds = accounts.filter((item) => item.status === 'active').map((item) => item.id);
+  return activeIds.length ? activeIds : accounts.map((item) => item.id);
+}
+
 function filteredAccounts() {
   const emailFilter = accountEmailFilter.trim().toLowerCase();
   const poolFilter = accountPoolFilter.trim().toLowerCase();
@@ -483,10 +488,10 @@ function updateBatchStatus() {
   const selectedCount = batchSelection.size;
   const passCount = batchResults.filter((item) => item.status === 'available').length;
   const doneCount = batchResults.length;
-  const keyCount = selectedAccountIds.size;
+  const keyCount = batchTokenIds().length;
   const text = batchRunning
-    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · ${keyCount} 个 Key 轮换` : ''}`
-    : `已选择 ${selectedCount} 个模型${keyCount > 1 ? ` · ${keyCount} 个 Key 轮换` : ''}，通过 ${passCount}`;
+    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}`
+    : `已选择 ${selectedCount} 个模型${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}，通过 ${passCount}`;
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
   document.getElementById('select-all-batch-btn').disabled = batchRunning || !models.length;
@@ -661,7 +666,7 @@ async function scanOneModel(tokenId, modelId) {
 }
 
 async function runBatchScan() {
-  const tokenIds = Array.from(selectedAccountIds);
+  const tokenIds = batchTokenIds();
   const selectedModels = Array.from(batchSelection);
   if (!tokenIds.length || !selectedModels.length) return;
 
