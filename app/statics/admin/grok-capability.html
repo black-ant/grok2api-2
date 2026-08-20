@@ -233,6 +233,8 @@ let selectedAccountIds = new Set();
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
+const BATCH_SCAN_DELAY_MS = 2000;
+const BATCH_SCAN_RETRY_DELAY_MS = 15000;
 let accountEmailFilter = '';
 let accountPoolFilter = '';
 const VIRTUAL_MODEL_ALIASES = ['FREE', 'SUPER'];
@@ -490,7 +492,7 @@ function updateBatchStatus() {
   const doneCount = batchResults.length;
   const keyCount = batchTokenIds().length;
   const text = batchRunning
-    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}`
+    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''} · 间隔 ${BATCH_SCAN_DELAY_MS / 1000}s`
     : `已选择 ${selectedCount} 个模型${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}，通过 ${passCount}`;
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
@@ -665,6 +667,34 @@ async function scanOneModel(tokenId, modelId) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeModelWithToken(modelId, tokenId) {
+  const account = accounts.find((item) => item.id === tokenId) || null;
+  const report = await scanOneModel(tokenId, modelId);
+  const result = report.results?.[0] || { id: modelId, status: 'unknown' };
+  result.token_id = tokenId;
+  result.token_tail = account ? accountKeyTailLabel(account) : String(tokenId).slice(-6);
+  return result;
+}
+
+async function probeModelFailure(modelId, tokenId, error) {
+  const model = models.find((item) => item.id === modelId) || { id: modelId };
+  const account = accounts.find((item) => item.id === tokenId) || null;
+  return {
+    id: modelId,
+    name: model.name || modelId,
+    kind: model.kind || 'chat',
+    status: 'unknown',
+    http_status: error.status || 0,
+    message: error.message,
+    token_id: tokenId,
+    token_tail: account ? accountKeyTailLabel(account) : String(tokenId).slice(-6),
+  };
+}
+
 async function runBatchScan() {
   const tokenIds = batchTokenIds();
   const selectedModels = Array.from(batchSelection);
@@ -677,29 +707,27 @@ async function runBatchScan() {
   try {
     for (let index = 0; index < selectedModels.length; index++) {
       const modelId = selectedModels[index];
-      const tokenId = tokenIds[index % tokenIds.length];
-      const account = accounts.find((item) => item.id === tokenId) || null;
+      let tokenId = tokenIds[index % tokenIds.length];
       renderBatchModels(modelId);
       try {
-        const report = await scanOneModel(tokenId, modelId);
-        const result = report.results?.[0] || { id: modelId, status: 'unknown' };
-        result.token_id = tokenId;
-        result.token_tail = account ? accountKeyTailLabel(account) : String(tokenId).slice(-6);
-        batchResults.push(result);
+        batchResults.push(await probeModelWithToken(modelId, tokenId));
       } catch (error) {
-        const model = models.find((item) => item.id === modelId) || { id: modelId };
-        batchResults.push({
-          id: modelId,
-          name: model.name || modelId,
-          kind: model.kind || 'chat',
-          status: 'unknown',
-          http_status: error.status || 0,
-          message: error.message,
-          token_id: tokenId,
-          token_tail: account ? accountKeyTailLabel(account) : String(tokenId).slice(-6),
-        });
+        if (error.status === 429) {
+          // 限流：等待退避后换下一个 Key 重试一次，避免继续命中限流
+          await sleep(BATCH_SCAN_RETRY_DELAY_MS);
+          tokenId = tokenIds[(index + 1) % tokenIds.length];
+          try {
+            batchResults.push(await probeModelWithToken(modelId, tokenId));
+          } catch (retryError) {
+            batchResults.push(await probeModelFailure(modelId, tokenId, retryError));
+          }
+        } else {
+          batchResults.push(await probeModelFailure(modelId, tokenId, error));
+        }
       }
       renderBatchModels();
+      // 关键：每个探针之间必须间隔，禁止连续调用触发限流
+      if (index < selectedModels.length - 1) await sleep(BATCH_SCAN_DELAY_MS);
     }
     const token = accounts.find((item) => item.id === tokenIds[0]) || null;
     const available = batchResults.filter((item) => item.status === 'available').length;
