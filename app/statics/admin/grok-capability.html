@@ -233,7 +233,6 @@ let selectedAccountIds = new Set();
 let batchSelection = new Set();
 let batchResults = [];
 let batchRunning = false;
-const BATCH_SCAN_DELAY_MS = 2000;
 const BATCH_SCAN_RETRY_DELAY_MS = 15000;
 let accountEmailFilter = '';
 let accountPoolFilter = '';
@@ -497,7 +496,7 @@ function updateBatchStatus() {
   const doneCount = batchResults.length;
   const keyCount = batchTokenIds().length;
   const text = batchRunning
-    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''} · 间隔 ${BATCH_SCAN_DELAY_MS / 1000}s`
+    ? `检测中：${doneCount} / ${selectedCount}，通过 ${passCount}${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}`
     : `已选择 ${selectedCount} 个模型${keyCount > 1 ? ` · 全部 ${keyCount} 个 Key 轮换` : ''}，通过 ${passCount}`;
   document.getElementById('batch-status').textContent = text;
   document.getElementById('start-batch-btn').disabled = batchRunning || !selectedCount;
@@ -729,8 +728,6 @@ async function runBatchScan() {
         }
       }
       renderBatchModels();
-      // 关键：每个探针之间必须间隔，禁止连续调用触发限流
-      if (index < selectedModels.length - 1) await sleep(BATCH_SCAN_DELAY_MS);
     }
     const token = accounts.find((item) => item.id === tokenIds[0]) || null;
     const available = batchResults.filter((item) => item.status === 'available').length;
