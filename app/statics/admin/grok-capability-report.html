@@ -92,7 +92,6 @@
           <thead>
             <tr>
               <th>模型</th>
-              <th>账号</th>
               <th>类型</th>
               <th>状态</th>
               <th>HTTP</th>
@@ -183,8 +182,7 @@ function renderReport() {
   document.getElementById('report-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
   document.getElementById('result-body').innerHTML = report.results.map((item) => `
     <tr>
-      <td><div>${esc(item.name || item.id)}</div><div class="mono muted">${esc(item.id)}</div></td>
-      <td class="mono">${esc(item.token_tail || '—')}</td>
+      <td><div>${esc(item.name || item.id)}${item.token_tail ? ` · ${esc(item.token_tail)}` : ''}</div><div class="mono muted">${esc(item.id)}</div></td>
       <td>${esc(item.kind || 'chat')}</td>
       <td><span class="status-pill status-${esc(item.status || 'unknown')}">${esc(statusLabel(item.status))}</span></td>
       <td class="mono">${esc(item.http_status ?? '—')}</td>

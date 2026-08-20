@@ -278,6 +278,11 @@ function batchTokenIds() {
   return activeIds.length ? activeIds : accounts.map((item) => item.id);
 }
 
+function batchKeyTail(account, tokenId) {
+  const value = String(account?.token_mask || account?.id || tokenId || '').trim();
+  return value ? value.slice(-4) : '-';
+}
+
 function filteredAccounts() {
   const emailFilter = accountEmailFilter.trim().toLowerCase();
   const poolFilter = accountPoolFilter.trim().toLowerCase();
@@ -564,10 +569,9 @@ function renderBatchResults() {
     return `
       <tr class="${status === 'available' ? 'is-pass' : 'is-fail'}">
         <td>
-          <div class="result-model" title="${esc(item.id)}">${esc(modelName)}</div>
+          <div class="result-model" title="${esc(item.id)}">${esc(modelName)}${item.token_tail ? ` · ${esc(item.token_tail)}` : ''}</div>
           <div class="result-meta">${esc(item.id)} · ${esc(kind)} · ${esc(pool)}</div>
         </td>
-        <td class="mono">${esc(item.token_tail || '—')}</td>
         <td><span class="${batchPillClass(status)}">${esc(batchStatusLabel(status))}</span></td>
         <td>${esc(batchResultText(item))}</td>
         <td>
@@ -583,7 +587,6 @@ function renderBatchResults() {
       <thead>
         <tr>
           <th>模型</th>
-          <th>账号</th>
           <th>状态</th>
           <th>结果</th>
           <th>操作</th>
@@ -676,7 +679,7 @@ async function probeModelWithToken(modelId, tokenId) {
   const report = await scanOneModel(tokenId, modelId);
   const result = report.results?.[0] || { id: modelId, status: 'unknown' };
   result.token_id = tokenId;
-  result.token_tail = account ? accountKeyTailLabel(account) : String(tokenId).slice(-6);
+  result.token_tail = batchKeyTail(account, tokenId);
   return result;
 }
 
@@ -691,7 +694,7 @@ async function probeModelFailure(modelId, tokenId, error) {
     http_status: error.status || 0,
     message: error.message,
     token_id: tokenId,
-    token_tail: account ? accountKeyTailLabel(account) : String(tokenId).slice(-6),
+    token_tail: batchKeyTail(account, tokenId),
   };
 }
 
