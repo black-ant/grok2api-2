@@ -86,11 +86,23 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(resolved.model, "grok-4.20-auto")
         self.assertFalse(resolved.is_virtual)
 
-    def test_empty_virtual_mapping_is_not_resolved(self):
+    def test_empty_virtual_mapping_falls_back_to_default_candidate(self):
         with patch.object(aliases, "get_config", return_value={"FREE": []}):
             resolved = aliases.resolve("FREE")
 
-        self.assertIsNone(resolved)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.model, "grok-4.3-console")
+        self.assertTrue(resolved.is_virtual)
+
+    def test_missing_virtual_mapping_falls_back_to_default_aliases(self):
+        with patch.object(aliases, "get_config", return_value={}):
+            free = aliases.resolve("FREE")
+            super_resolved = aliases.resolve("SUPER")
+
+        self.assertIsNotNone(free)
+        self.assertEqual(free.model, "grok-4.3-console")
+        self.assertIsNotNone(super_resolved)
+        self.assertEqual(super_resolved.model, "grok-4.20-auto")
 
     def test_stable_pool_round_robins_and_degraded_pool_is_weighted(self):
         config = {

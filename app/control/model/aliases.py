@@ -38,6 +38,18 @@ class ModelPoolConfig:
         }
 
 
+DEFAULT_ALIAS_CONFIG: dict[str, ModelPoolConfig] = {
+    "FREE": ModelPoolConfig(
+        stable=("grok-4.3-console",),
+        degraded=("grok-4.20-0309-console",),
+    ),
+    "SUPER": ModelPoolConfig(
+        stable=("grok-4.20-auto",),
+        degraded=("grok-4.3-beta",),
+    ),
+}
+
+
 @dataclass(frozen=True)
 class ModelResolution:
     """Resolved model request.
@@ -139,13 +151,21 @@ def _raw_aliases() -> dict[str, object]:
 
 
 def alias_configs() -> dict[str, ModelPoolConfig]:
-    """Return normalized stable/degraded pool configuration for each alias."""
+    """Return normalized stable/degraded pool configuration for each alias.
+
+    Core aliases always have a fallback so an empty or partially cleared
+    ``models.aliases`` cannot silently disable FREE/SUPER routing.
+    """
 
     result: dict[str, ModelPoolConfig] = {}
     for virtual_model, value in _raw_aliases().items():
         name = str(virtual_model).strip()
         if name:
             result[name] = _parse_pool(value)
+    for name, default in DEFAULT_ALIAS_CONFIG.items():
+        current = result.get(name)
+        if current is None or not current.candidates:
+            result[name] = default
     return result
 
 
@@ -655,6 +675,7 @@ def routing_snapshot() -> dict[str, Any]:
 
 
 __all__ = [
+    "DEFAULT_ALIAS_CONFIG",
     "DEFAULT_DEGRADED_RATIO",
     "DEFAULT_STABLE_RATIO",
     "ModelPoolConfig",

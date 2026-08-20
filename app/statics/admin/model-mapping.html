@@ -76,7 +76,7 @@
       <span class="status" id="status">加载中…</span>
       <button class="btn-line" id="models-btn" type="button">可用模型</button>
       <button class="btn-line" id="reset-btn" type="button" disabled>重置</button>
-      <button class="btn-line" id="clear-btn" type="button">清空</button>
+      <button class="btn-line" id="restore-btn" type="button">恢复默认</button>
       <button class="btn-primary" id="save-btn" type="button" disabled>保存</button>
     </div>
   </div>
@@ -114,6 +114,10 @@
 <script>
 const VIRTUAL_MODELS = ['FREE', 'SUPER'];
 const POOLS = ['stable', 'degraded'];
+const DEFAULT_ALIASES = {
+  FREE: { stable: ['grok-4.3-console'], degraded: ['grok-4.20-0309-console'] },
+  SUPER: { stable: ['grok-4.20-auto'], degraded: ['grok-4.3-beta'] },
+};
 let adminAuthKey = '';
 let allModels = [];
 let savedAliases = {};
@@ -316,10 +320,10 @@ async function saveMapping() {
   window.showToast?.('模型映射已保存', 'success');
 }
 
-async function clearMapping() {
-  if (!window.confirm('确定清空 FREE / SUPER 的全部模型映射吗？')) return;
-  const aliases = normalizeAliases({});
-  setStatus('清空中…');
+async function restoreMapping() {
+  if (!window.confirm('确定恢复默认 FREE / SUPER 模型映射吗？')) return;
+  const aliases = normalizeAliases(DEFAULT_ALIASES);
+  setStatus('恢复默认中…');
   await apiFetch('/model-mapping', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -328,7 +332,7 @@ async function clearMapping() {
   savedAliases = normalizeAliases(aliases);
   draftAliases = normalizeAliases(aliases);
   render();
-  window.showToast?.('模型映射已清空', 'success');
+  window.showToast?.('模型映射已恢复默认', 'success');
 }
 
 function waitI18n() {
@@ -352,9 +356,9 @@ function waitI18n() {
     draftAliases = normalizeAliases(savedAliases);
     render();
   });
-  document.getElementById('clear-btn').addEventListener('click', () => clearMapping().catch((error) => {
-    setStatus('清空失败');
-    window.showToast?.(`清空失败: ${error.message}`, 'error');
+  document.getElementById('restore-btn').addEventListener('click', () => restoreMapping().catch((error) => {
+    setStatus('恢复默认失败');
+    window.showToast?.(`恢复默认失败: ${error.message}`, 'error');
   }));
   document.getElementById('models-btn').addEventListener('click', openModelsModal);
   document.querySelectorAll('[data-models-close]').forEach((node) => node.addEventListener('click', closeModelsModal));

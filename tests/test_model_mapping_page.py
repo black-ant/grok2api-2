@@ -12,6 +12,9 @@ class ModelMappingPageTests(unittest.TestCase):
         self.assertIn("降级池", html)
         self.assertIn("apiFetch('/model-mapping'", html)
         self.assertIn("body:JSON.stringify({ models:{ aliases } })", html)
+        self.assertIn("id=\"restore-btn\"", html)
+        self.assertIn("const DEFAULT_ALIASES =", html)
+        self.assertNotIn("id=\"clear-btn\"", html)
         self.assertNotIn("<table", html.lower())
 
     def test_model_routing_page_is_read_only_and_auto_refreshing(self):

@@ -422,6 +422,8 @@ async def update_model_mapping(req: ConfigPatchRequest):
         raise ValidationError("models.aliases must be an object", param="models.aliases")
 
     normalized = model_aliases.normalize_alias_config(aliases)
+    for alias_name, alias_cfg in model_aliases.alias_config_map().items():
+        normalized.setdefault(alias_name, alias_cfg)
 
     await config.update({"models": {"aliases": normalized}})
     await config.load()
