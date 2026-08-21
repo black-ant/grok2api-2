@@ -467,7 +467,10 @@ async def list_debug_chat_tokens(repo: "AccountRepository" = Depends(get_repo)):
 @router.post("/debug/chat", tags=[_TAG_ADMIN_SYSTEM])
 async def debug_chat(req: Request):
     from app.products.openai.chat import completions as chat_completions
-    from app.products.openai.router import _validate_chat
+    from app.products.openai.router import (
+        _resolve_model_for_request,
+        _validate_chat,
+    )
     from app.products.openai.schemas import ChatCompletionRequest
 
     try:
@@ -484,6 +487,26 @@ async def debug_chat(req: Request):
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     _validate_chat(chat_req)
 
+    resolved = await _resolve_model_for_request(chat_req.model, req)
+    if resolved is None:
+        raise ValidationError(
+            f"Model {chat_req.model!r} does not exist or you do not have access to it.",
+            param="model",
+            code="model_not_found",
+        )
+    real_model = resolved.model
+    request_state = getattr(req, "state", None)
+    if request_state is not None:
+        routing = getattr(request_state, "request_log_routing", None)
+        if not isinstance(routing, dict):
+            routing = {}
+            request_state.request_log_routing = routing
+        routing.update({"model": chat_req.model, "resolved_model": real_model})
+        if resolved.is_virtual:
+            routing.update(
+                {"virtual_model": chat_req.model, "model_pool": resolved.pool}
+            )
+
     proxy_lease = None
     proxy_kernel = None
     if proxy_id:
@@ -495,7 +518,6 @@ async def debug_chat(req: Request):
             ) from exc
 
     if proxy_lease is not None:
-        request_state = getattr(req, 'state', None)
         if request_state is not None:
             routing = getattr(request_state, 'request_log_routing', None)
             if not isinstance(routing, dict):
@@ -506,7 +528,7 @@ async def debug_chat(req: Request):
     started = time.perf_counter()
     messages = [m.model_dump(exclude_none=True) for m in chat_req.messages]
     result = await chat_completions(
-        model=chat_req.model,
+        model=real_model,
         messages=messages,
         stream=False,
         emit_think=None if chat_req.reasoning_effort is None else chat_req.reasoning_effort != "none",
@@ -516,6 +538,8 @@ async def debug_chat(req: Request):
         top_p=chat_req.top_p if chat_req.top_p is not None else 0.95,
         proxy_lease=proxy_lease,
         force_token=force_token,
+        model_fallbacks=model_aliases.fallback_candidates(resolved),
+        request_log_routing=getattr(request_state, "request_log_routing", None),
     )
     return Response(
         content=orjson.dumps(

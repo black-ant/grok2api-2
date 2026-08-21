@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from app.control.proxy import ProxyDirectory, acquire_clash_proxy_lease
 from app.control.proxy.clash import ClashParseError, parse_clash_yaml
 from app.control.proxy.models import ProxyLease
+from app.control.model import registry as model_registry
 from app.products.web.admin import debug_chat
 
 
@@ -128,6 +129,17 @@ proxies:
                 new=AsyncMock(return_value=(lease, "native")),
             ),
             patch(
+                "app.products.openai.router._resolve_model_for_request",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        model="grok-4.3",
+                        spec=model_registry.get("grok-4.3"),
+                        is_virtual=False,
+                        pool="stable",
+                    )
+                ),
+            ),
+            patch(
                 "app.products.openai.chat.completions",
                 new=AsyncMock(side_effect=fake_chat_completions),
             ),
@@ -154,6 +166,16 @@ proxies:
             return {"ok": True}
 
         with patch(
+            "app.products.openai.router._resolve_model_for_request",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    model="grok-4.3",
+                    spec=model_registry.get("grok-4.3"),
+                    is_virtual=False,
+                    pool="stable",
+                )
+            ),
+        ), patch(
             "app.products.openai.chat.completions",
             new=AsyncMock(side_effect=fake_chat_completions),
         ):
@@ -167,6 +189,49 @@ proxies:
             )
 
         self.assertIsNone(captured["proxy_lease"])
+
+    async def test_virtual_model_is_resolved_before_chat_service(self):
+        captured = {}
+        resolved = SimpleNamespace(
+            model="grok-4.3-console",
+            spec=model_registry.get("grok-4.3-console"),
+            is_virtual=True,
+            pool="stable",
+            candidates=("grok-4.3-console", "grok-4.20-0309-console"),
+        )
+
+        async def fake_chat_completions(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        with (
+            patch(
+                "app.products.openai.router._resolve_model_for_request",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "app.products.openai.chat.completions",
+                new=AsyncMock(side_effect=fake_chat_completions),
+            ),
+        ):
+            request = _Request(
+                {
+                    "model": "FREE",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+            await debug_chat(request)
+
+        self.assertEqual(captured["model"], "grok-4.3-console")
+        self.assertEqual(captured["model_fallbacks"], ("grok-4.20-0309-console",))
+        self.assertEqual(
+            request.state.request_log_routing["model"],
+            "FREE",
+        )
+        self.assertEqual(
+            request.state.request_log_routing["resolved_model"],
+            "grok-4.3-console",
+        )
 
 
 if __name__ == "__main__":
