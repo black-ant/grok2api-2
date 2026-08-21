@@ -28,10 +28,31 @@ from .models import (
 from .providers.manual import ManualClearanceProvider
 from .providers.flaresolverr import FlareSolverrClearanceProvider
 from .bridge import KernelBridgeError, get_proxy_bridge_manager
-from .clash import ClashParseError, find_clash_candidate
+from .clash import ClashParseError, find_clash_candidate, parse_clash_yaml
 
 _DEFAULT_CLEARANCE_ORIGIN = "https://grok.com"
 BundleKey = tuple[str, str]
+
+
+def _clash_mapping(cfg, key: str) -> dict[str, str]:
+    getter = getattr(cfg, "get", None)
+    value = getter(key, {}) if getter else {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(proxy_id): str(kernel).strip()
+        for proxy_id, kernel in value.items()
+        if str(proxy_id).strip() and str(kernel).strip()
+    }
+
+
+def _unique_proxy_ids(values) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in values or []:
+        proxy_id = str(value).strip()
+        if proxy_id and proxy_id not in result:
+            result.append(proxy_id)
+    return tuple(result)
 
 
 def _clearance_host(clearance_origin: str | None) -> str:
@@ -87,8 +108,57 @@ class ProxyDirectory:
         clash_proxy_id = cfg.get_str('proxy.clash.selected_proxy_id', '')
         clash_kernel = cfg.get_str('proxy.clash.selected_kernel', 'auto')
         clash_url = cfg.get_str('proxy.clash.selected_url', '')
+        clash_pool_ids = _unique_proxy_ids(
+            cfg.get_list('proxy.clash.pool_proxy_ids', [])
+        )
+        clash_pool_kernels = _clash_mapping(cfg, 'proxy.clash.pool_kernels')
+        resolved_pool_kernels: dict[str, str] = {}
         if clash_enabled:
-            if clash_yaml and clash_proxy_id:
+            if clash_yaml and clash_pool_ids:
+                try:
+                    candidates = parse_clash_yaml(clash_yaml)
+                    candidates_by_id = {
+                        candidate.proxy_id: candidate for candidate in candidates
+                    }
+                    missing = [
+                        proxy_id
+                        for proxy_id in clash_pool_ids
+                        if proxy_id not in candidates_by_id
+                    ]
+                    if missing:
+                        raise ClashParseError('代理池节点不在当前 Clash YAML 中')
+                    bridge_manager = get_proxy_bridge_manager()
+                    pool_urls: list[str] = []
+                    for proxy_id in clash_pool_ids:
+                        candidate = candidates_by_id[proxy_id]
+                        preferred_kernel = (
+                            'native'
+                            if candidate.kernels == ('native',)
+                            else (
+                                clash_pool_kernels.get(proxy_id)
+                                or clash_kernel
+                                or 'auto'
+                            )
+                        )
+                        selected_url, selected_kernel = (
+                            await bridge_manager.ensure_candidate(
+                                candidate,
+                                preferred_kernel,
+                                auto_download=cfg.get_bool(
+                                    'proxy.kernels.auto_download', False
+                                ),
+                            )
+                        )
+                        pool_urls.append(selected_url)
+                        resolved_pool_kernels[proxy_id] = selected_kernel
+                    egress_mode = EgressMode.PROXY_POOL
+                    base_pool = tuple(pool_urls)
+                    res_pool = tuple(pool_urls)
+                    clash_url = pool_urls[0]
+                    clash_kernel = resolved_pool_kernels[clash_pool_ids[0]]
+                except (ClashParseError, KernelBridgeError, RuntimeError) as exc:
+                    raise RuntimeError(f'Clash 代理池启动失败：{exc}') from exc
+            elif clash_yaml and clash_proxy_id:
                 try:
                     candidate = find_clash_candidate(clash_yaml, clash_proxy_id)
                     bridge_manager = get_proxy_bridge_manager()
@@ -101,7 +171,7 @@ class ProxyDirectory:
                     )
                 except (ClashParseError, KernelBridgeError, RuntimeError) as exc:
                     raise RuntimeError(f'Clash 全局代理启动失败：{exc}') from exc
-            if clash_url:
+            if clash_url and egress_mode != EgressMode.PROXY_POOL:
                 egress_mode = EgressMode.SINGLE_PROXY
                 base_url = clash_url
                 res_url = clash_url
@@ -115,6 +185,9 @@ class ProxyDirectory:
             clash_proxy_id,
             clash_kernel,
             clash_url,
+            clash_pool_ids,
+            tuple(sorted(clash_pool_kernels.items())),
+            tuple(sorted(resolved_pool_kernels.items())),
             egress_mode.value,
             clearance_mode.value,
             base_url,

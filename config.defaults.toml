@@ -106,6 +106,16 @@ selected_proxy_name = ''
 selected_kernel = 'auto'
 # 后端校验后的原生代理 URL
 selected_url = ''
+# 已加入 Clash 代理池的节点标识
+pool_proxy_ids = []
+# 代理池节点对应的实际内核
+pool_kernels = {}
+# 节点最近一次测速结果
+speed_results = {}
+# 自动测速目标与并发设置
+test_url = 'https://api.ipify.org?format=json'
+test_timeout_sec = 8
+test_concurrency = 4
 
 [proxy.kernels]
 # 内核安装目录；相对路径基于项目根目录

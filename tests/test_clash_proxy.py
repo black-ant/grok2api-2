@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.control.proxy import ProxyDirectory
 from app.control.proxy.bridge import (
@@ -13,6 +13,7 @@ from app.control.proxy.clash import (
     parse_clash_yaml,
 )
 from app.control.proxy.kernels import KernelSpec, ProxyKernelManager
+from app.control.proxy.speedtest import test_clash_candidate as run_clash_candidate
 from app.products.web.admin import proxy as admin_proxy
 
 
@@ -110,6 +111,9 @@ class _FakeProxyConfig:
     def get_int(self, key, default=0):
         return self.values.get(key, default)
 
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
 
 class _FakeAdminConfig(_FakeProxyConfig):
     def __init__(self, values=None):
@@ -127,7 +131,9 @@ class _FakeAdminConfig(_FakeProxyConfig):
 class _FakeAdminBridge:
     def __init__(self):
         self.candidate = None
+        self.candidates = []
         self.preferred = None
+        self.preferreds = []
         self.stopped = False
 
     def statuses(self):
@@ -138,8 +144,11 @@ class _FakeAdminBridge:
 
     async def ensure_candidate(self, candidate, preferred, *, auto_download):
         self.candidate = candidate
+        self.candidates.append(candidate)
         self.preferred = preferred
-        return candidate.proxy_url or "socks5://127.0.0.1:19001", preferred
+        self.preferreds.append(preferred)
+        selected_kernel = preferred or candidate.kernels[0]
+        return candidate.proxy_url or "socks5://127.0.0.1:19001", selected_kernel
 
 
 class ClashAdminPersistenceTests(unittest.IsolatedAsyncioTestCase):
@@ -208,6 +217,149 @@ proxies:
         self.assertEqual(payload["selected_proxy_name"], "SOCKS 节点")
         self.assertEqual(payload["total"], 3)
 
+    async def test_apply_adds_a_batch_to_the_existing_pool(self):
+        saved_yaml = ClashProxyParserTests.sample_yaml.strip()
+        candidates = parse_clash_yaml(saved_yaml)
+        fake_config = _FakeAdminConfig(
+            {
+                "proxy.clash.draft_yaml": saved_yaml,
+                "proxy.clash.pool_proxy_ids": [candidates[0].proxy_id],
+                "proxy.clash.pool_kernels": {candidates[0].proxy_id: "native"},
+            }
+        )
+        bridge = _FakeAdminBridge()
+
+        with (
+            patch.object(admin_proxy, "config", fake_config),
+            patch.object(admin_proxy, "get_proxy_bridge_manager", return_value=bridge),
+        ):
+            payload = await admin_proxy.apply_clash(
+                admin_proxy.ClashApplyRequest(
+                    proxy_ids=[candidates[1].proxy_id],
+                    selected_kernel="native",
+                )
+            )
+
+        self.assertEqual(
+            fake_config.values["proxy.clash.pool_proxy_ids"],
+            [candidates[0].proxy_id, candidates[1].proxy_id],
+        )
+        self.assertEqual([candidate.name for candidate in bridge.candidates], [
+            "HTTP 节点",
+            "SOCKS 节点",
+        ])
+        self.assertEqual(payload["pool_size"], 2)
+        self.assertTrue(all(proxy["in_pool"] for proxy in payload["proxies"][:2]))
+
+    async def test_mixed_pool_forces_native_kernel_for_native_nodes(self):
+        saved_yaml = ClashProxyParserTests.sample_yaml.strip()
+        candidates = parse_clash_yaml(saved_yaml)
+        fake_config = _FakeAdminConfig({"proxy.clash.draft_yaml": saved_yaml})
+        bridge = _FakeAdminBridge()
+
+        with (
+            patch.object(admin_proxy, "config", fake_config),
+            patch.object(admin_proxy, "get_proxy_bridge_manager", return_value=bridge),
+        ):
+            await admin_proxy.apply_clash(
+                admin_proxy.ClashApplyRequest(
+                    proxy_ids=[candidates[0].proxy_id, candidates[2].proxy_id],
+                    selected_kernel="xray",
+                )
+            )
+
+        self.assertEqual(bridge.preferreds, ["native", "xray"])
+
+    async def test_speed_test_persists_results(self):
+        saved_yaml = ClashProxyParserTests.sample_yaml.strip()
+        candidate = parse_clash_yaml(saved_yaml)[0]
+        result = {
+            "state": "alive",
+            "latency_ms": 123,
+            "status_code": 200,
+            "kernel": "native",
+            "error": "",
+            "tested_at": 1000,
+        }
+        fake_config = _FakeAdminConfig({"proxy.clash.draft_yaml": saved_yaml})
+        bridge = _FakeAdminBridge()
+        with (
+            patch.object(admin_proxy, "config", fake_config),
+            patch.object(admin_proxy, "get_proxy_bridge_manager", return_value=bridge),
+            patch.object(
+                admin_proxy,
+                "speedtest_config",
+                return_value=("https://example.com", 2.0, False, 1),
+            ),
+            patch.object(
+                admin_proxy,
+                "test_clash_candidates",
+                new=AsyncMock(return_value={candidate.proxy_id: result}),
+            ),
+        ):
+            payload = await admin_proxy.test_clash(
+                admin_proxy.ClashSpeedTestRequest(proxy_ids=[candidate.proxy_id])
+            )
+
+        self.assertEqual(fake_config.values["proxy.clash.speed_results"][candidate.proxy_id], result)
+        self.assertEqual(payload["proxies"][0]["speed"], result)
+
+
+class ClashSpeedTestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_candidate_reports_alive_latency(self):
+        candidate = parse_clash_yaml(ClashProxyParserTests.sample_yaml)[0]
+
+        class _FakeBridge:
+            def __init__(self):
+                self.url = None
+                self.preferred = None
+
+            async def ensure_candidate(self, candidate, preferred, *, auto_download):
+                self.url = candidate.proxy_url
+                self.preferred = preferred
+                return candidate.proxy_url, "native"
+
+            def stop_candidate(self, candidate, kernel=None):
+                return None
+
+        class _FakeResponse:
+            status_code = 204
+
+        class _FakeSession:
+            last_kwargs = None
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                type(self).last_kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return None
+
+            async def get(self, url, *, timeout, allow_redirects):
+                self.url = url
+                self.timeout = timeout
+                self.allow_redirects = allow_redirects
+                return _FakeResponse()
+
+        bridge = _FakeBridge()
+        with patch("curl_cffi.requests.AsyncSession", _FakeSession):
+            result = await run_clash_candidate(
+                candidate,
+                bridge,
+                target_url="https://example.com/health",
+                timeout_sec=2,
+                preferred_kernel="xray",
+            )
+
+        self.assertEqual(result["state"], "alive")
+        self.assertEqual(result["status_code"], 204)
+        self.assertIsInstance(result["latency_ms"], int)
+        self.assertEqual(_FakeSession.last_kwargs["proxies"]["https"], candidate.proxy_url)
+        self.assertEqual(bridge.preferred, "native")
+
 
 class ClashProxyRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_enabled_clash_overrides_and_disabled_clash_restores_egress(self):
@@ -253,6 +405,47 @@ class ClashProxyRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(directory.nodes[0].proxy_url, "socks5://127.0.0.1:19001")
         self.assertEqual(bridge.candidate.proxy_type, "vmess")
+
+    async def test_clash_pool_loads_multiple_nodes_into_proxy_pool(self):
+        candidates = parse_clash_yaml(ClashProxyParserTests.sample_yaml)
+        fake_config = _FakeProxyConfig()
+        fake_config.values.update(
+            {
+                "proxy.egress.mode": "direct",
+                "proxy.egress.proxy_url": "",
+                "proxy.clash.pool_proxy_ids": [
+                    candidates[0].proxy_id,
+                    candidates[1].proxy_id,
+                ],
+                "proxy.clash.pool_kernels": {
+                    candidates[0].proxy_id: "native",
+                    candidates[1].proxy_id: "native",
+                },
+            }
+        )
+
+        class _FakePoolBridge:
+            def __init__(self):
+                self.calls = []
+
+            async def ensure_candidate(self, candidate, preferred, *, auto_download):
+                self.calls.append((candidate.name, preferred))
+                return f"socks5://127.0.0.1:{19000 + len(self.calls)}", preferred
+
+        bridge = _FakePoolBridge()
+        directory = ProxyDirectory()
+        with (
+            patch("app.control.proxy.get_config", return_value=fake_config),
+            patch("app.control.proxy.get_proxy_bridge_manager", return_value=bridge),
+        ):
+            await directory.load()
+
+        self.assertEqual(directory.egress_mode.value, "proxy_pool")
+        self.assertEqual(
+            [node.proxy_url for node in directory.nodes],
+            ["socks5://127.0.0.1:19001", "socks5://127.0.0.1:19002"],
+        )
+        self.assertEqual(bridge.calls, [("HTTP 节点", "native"), ("SOCKS 节点", "native")])
 
 
 class ProxyKernelConfigTests(unittest.TestCase):
