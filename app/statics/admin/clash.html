@@ -35,6 +35,7 @@
     .clash-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px }
     .clash-btn-danger { border:1px solid #f0caca; background:#fff7f7; color:#b42318 }
     .clash-btn-danger:hover { background:#fff0f0 }
+    .clash-btn-danger:disabled { opacity:.45; cursor:default }
     .clash-table-wrap { overflow:auto; border:1px solid #eeeae2; border-radius:10px }
     .clash-table { width:100%; min-width:650px; border-collapse:collapse; table-layout:fixed }
     .clash-table th { padding:10px 12px; background:#fbfaf7; color:#928b80; font-size:11px; font-weight:600; text-align:left; white-space:nowrap }
@@ -77,7 +78,7 @@
       <strong id='clash-current-name' class='clash-current-name'>未启用</strong>
       <span class='clash-current-scope'>全局</span>
     </div>
-    <button id='clash-disable' class='btn clash-btn-danger' type='button'>关闭代理</button>
+    <button id='clash-disable' class='btn clash-btn-danger' type='button' hidden>关闭代理</button>
   </div>
 
   <div class='clash-steps' aria-label='Clash配置流程'>
@@ -181,12 +182,16 @@ function renderStatus() {
   status.textContent = state.enabled ? '已启用' : '未启用';
   status.classList.toggle('is-on', state.enabled);
   currentName.textContent = state.enabled ? (state.selectedName || '已启用') : '未启用';
-  disableButton.disabled = !state.enabled;
+  disableButton.hidden = !state.enabled;
+  disableButton.title = state.enabled ? '关闭全局 Clash 代理' : '';
 }
 
 function renderRows() {
   const supported = state.proxies.filter(proxy => proxy.supported).length;
-  countLabel.textContent = `${state.proxies.length} 个节点，${supported} 个可用`;
+  countLabel.textContent = supported
+    ? `${state.proxies.length} 个节点，${supported} 个可用`
+    : `${state.proxies.length} 个节点，暂无可用节点（仅支持 HTTP/HTTPS/SOCKS）`;
+  applyButton.disabled = !state.selectedId;
   if (!state.proxies.length) {
     rows.innerHTML = `<tr><td colspan='4' class='clash-empty'>没有解析到代理节点</td></tr>`;
     return;
@@ -241,7 +246,13 @@ async function parseYaml() {
 
 async function applyClash() {
   if (!state.selectedId) {
-    showToast('请选择一个代理节点', 'error');
+    const supported = state.proxies.some(proxy => proxy.supported);
+    showToast(
+      supported
+        ? '请选择一个代理节点'
+        : '当前 YAML 没有可用的 HTTP/HTTPS/SOCKS 节点，vless/vmess 需要 Mihomo/Xray 内核',
+      'error',
+    );
     return;
   }
   applyButton.disabled = true;
@@ -269,7 +280,10 @@ async function applyClash() {
 }
 
 async function disableClash() {
-  if (!state.enabled) return;
+  if (!state.enabled) {
+    showToast('Clash 代理当前未启用', 'info');
+    return;
+  }
   disableButton.disabled = true;
   try {
     const payload = await callApi('POST', '/proxy/clash', { enabled: false });
@@ -285,7 +299,10 @@ async function disableClash() {
 
 rows.addEventListener('change', event => {
   const input = event.target.closest('input[name=clash-node]');
-  if (input) state.selectedId = input.value;
+  if (input) {
+    state.selectedId = input.value;
+    applyButton.disabled = false;
+  }
 });
 parseButton.addEventListener('click', parseYaml);
 applyButton.addEventListener('click', applyClash);
