@@ -233,6 +233,8 @@ uv run granian --interface asgi --host 0.0.0.0 --port 8000 --workers 1 app.main:
 
 > 配置保存即时生效，无需重启。
 
+Clash 代理：进入 Admin → `Clash代理`，粘贴包含 `proxies` 的 YAML，解析后选择一个 HTTP/HTTPS/SOCKS 节点并启用。启用范围是全局，所有账号请求都会使用该节点；vmess、vless、trojan、SS 等需要 Mihomo/Xray 内核的节点会显示但不能选择。
+
 ---
 
 ## 模型列表

@@ -88,6 +88,11 @@ async def admin_grok_capability_report():
     return _serve_html("admin/grok-capability-report.html")
 
 
+@router.get('/admin/clash', include_in_schema=False)
+async def admin_clash():
+    return _serve_html('admin/clash.html')
+
+
 # --- WebUI ---
 @router.get("/webui", include_in_schema=False)
 async def webui_root():

@@ -172,12 +172,14 @@ from .batch import router as _batch_router  # noqa: E402
 from .assets import router as _assets_router  # noqa: E402
 from .cache import router as _cache_router  # noqa: E402
 from .capability import router as _capability_router  # noqa: E402
+from .proxy import router as _proxy_router  # noqa: E402
 
 router.include_router(_tokens_router)
 router.include_router(_batch_router)
 router.include_router(_assets_router)
 router.include_router(_cache_router)
 router.include_router(_capability_router)
+router.include_router(_proxy_router)
 
 
 # ---------------------------------------------------------------------------

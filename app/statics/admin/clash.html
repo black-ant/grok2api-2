@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang='zh-CN'>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+  <title>Grok2API - Clash代理</title>
+  <link rel='icon' href='/favicon.ico?v={{APP_VERSION}}'>
+  <link href='https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css' rel='stylesheet'>
+  <link href='/static/css/app.css?v={{APP_VERSION}}' rel='stylesheet'>
+  <style>
+    body { background:#FAF9F5 }
+    .clash-main { max-width:1040px; padding-bottom:48px }
+    .page-hd { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px }
+    .page-title { font-size:22px; font-weight:700; line-height:1.2 }
+    .page-sub { margin-top:5px; color:var(--fg-muted); font-size:13px }
+    .clash-status { min-height:28px; padding:0 11px; border-radius:999px; display:inline-flex; align-items:center; flex:0 0 auto; background:#f1f1f1; color:#777; font-size:12px; font-weight:600 }
+    .clash-status.is-on { background:#eaf8ef; color:#14803c }
+    .clash-current { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:16px; padding:12px 14px; border:1px solid #ece8df; border-radius:12px; background:#fff }
+    .clash-current-main { min-width:0; display:flex; align-items:center; gap:10px; font-size:13px }
+    .clash-current-label { color:#888; font-size:12px }
+    .clash-current-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; color:#27231f }
+    .clash-current-scope { color:#8b857b; font-size:12px }
+    .clash-steps { display:flex; align-items:center; gap:8px; margin-bottom:12px; color:#a29b90; font-size:12px; font-weight:600 }
+    .clash-step { display:inline-flex; align-items:center; gap:6px; padding:0 3px }
+    .clash-step-index { width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; background:#e9e5dd; color:#80796e; font-size:11px }
+    .clash-step.is-active { color:#25211d }
+    .clash-step.is-active .clash-step-index { background:#111; color:#fff }
+    .clash-step-line { width:28px; height:1px; background:#e2ddd4 }
+    .clash-panel { padding:18px; border:1px solid #ece8df; border-radius:14px; background:#fff }
+    .clash-panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px }
+    .clash-panel-title { color:#27231f; font-size:13px; font-weight:700 }
+    .clash-count { color:#8d877d; font-size:12px }
+    .clash-yaml { width:100%; min-height:360px; padding:12px; resize:vertical; border:1px solid #e6e1d8; border-radius:10px; background:#fbfaf7; color:#302b26; font:12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace }
+    .clash-yaml:focus { outline:none; border-color:#aaa296; box-shadow:0 0 0 3px rgba(84,73,60,.08) }
+    .clash-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px }
+    .clash-btn-danger { border:1px solid #f0caca; background:#fff7f7; color:#b42318 }
+    .clash-btn-danger:hover { background:#fff0f0 }
+    .clash-table-wrap { overflow:auto; border:1px solid #eeeae2; border-radius:10px }
+    .clash-table { width:100%; min-width:650px; border-collapse:collapse; table-layout:fixed }
+    .clash-table th { padding:10px 12px; background:#fbfaf7; color:#928b80; font-size:11px; font-weight:600; text-align:left; white-space:nowrap }
+    .clash-table td { padding:11px 12px; border-top:1px solid #f1eee8; color:#39332d; font-size:12px; vertical-align:middle }
+    .clash-table tr.is-disabled td { color:#aaa49c; background:#fcfbf9 }
+    .clash-table tr.is-selected td { background:#f7f5f0 }
+    .clash-choice { display:flex; align-items:center; gap:9px; min-width:0; cursor:pointer }
+    .clash-choice input { width:15px; height:15px; accent-color:#111; flex:0 0 auto }
+    .clash-node-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600 }
+    .clash-muted { color:#aaa49c !important }
+    .clash-reason { color:#b45309; font-size:11px }
+    .clash-empty { padding:32px 12px; color:#8d877d; text-align:center; font-size:13px }
+    @media (max-width:640px) {
+      .page-hd, .clash-current { align-items:flex-start; flex-direction:column }
+      .clash-status { align-self:flex-start }
+      .clash-current { gap:10px }
+      .clash-current-main { width:100% }
+      .clash-panel { padding:12px }
+      .clash-yaml { min-height:300px }
+      .clash-actions { justify-content:stretch }
+      .clash-actions .btn { flex:1 }
+    }
+  </style>
+</head>
+<body>
+<div id='admin-header' data-active='/admin/clash'></div>
+
+<main class='admin-main clash-main'>
+  <div class='page-hd'>
+    <div>
+      <div class='page-title'>Clash代理</div>
+      <div class='page-sub'>导入 YAML，选择一个节点后对所有账号生效。</div>
+    </div>
+    <div id='clash-status' class='clash-status'>未启用</div>
+  </div>
+
+  <div id='clash-current' class='clash-current'>
+    <div class='clash-current-main'>
+      <span class='clash-current-label'>当前节点</span>
+      <strong id='clash-current-name' class='clash-current-name'>未启用</strong>
+      <span class='clash-current-scope'>全局</span>
+    </div>
+    <button id='clash-disable' class='btn clash-btn-danger' type='button'>关闭代理</button>
+  </div>
+
+  <div class='clash-steps' aria-label='Clash配置流程'>
+    <div id='step-label-1' class='clash-step is-active'><span class='clash-step-index'>1</span><span>录入 YAML</span></div>
+    <span class='clash-step-line'></span>
+    <div id='step-label-2' class='clash-step'><span class='clash-step-index'>2</span><span>选择节点</span></div>
+  </div>
+
+  <section id='clash-input-step' class='clash-panel'>
+    <div class='clash-panel-head'>
+      <div class='clash-panel-title'>Clash YAML</div>
+      <span class='clash-count'>仅解析 proxies</span>
+    </div>
+    <textarea id='clash-yaml' class='clash-yaml' spellcheck='false' placeholder='proxies:
+  - name: 节点名称
+    type: socks5
+    server: 127.0.0.1
+    port: 7891'></textarea>
+    <div class='clash-actions'>
+      <button id='clash-parse' class='btn btn-primary' type='button'>解析代理</button>
+    </div>
+  </section>
+
+  <section id='clash-select-step' class='clash-panel' hidden>
+    <div class='clash-panel-head'>
+      <div class='clash-panel-title'>选择全局节点</div>
+      <span id='clash-count' class='clash-count'></span>
+    </div>
+    <div class='clash-table-wrap'>
+      <table class='clash-table'>
+        <thead><tr><th style='width:38%'>节点</th><th style='width:16%'>类型</th><th style='width:28%'>服务器</th><th style='width:18%'>端口</th></tr></thead>
+        <tbody id='clash-proxy-rows'></tbody>
+      </table>
+    </div>
+    <div class='clash-actions'>
+      <button id='clash-back' class='btn btn-ghost' type='button'>返回修改</button>
+      <button id='clash-apply' class='btn btn-primary' type='button'>启用并应用</button>
+    </div>
+  </section>
+</main>
+
+<script src='/static/js/i18n.js?v={{APP_VERSION}}'></script>
+<script src='/static/js/auth.js?v={{APP_VERSION}}'></script>
+<script src='/static/js/admin-header.js?v={{APP_VERSION}}'></script>
+<script src='/static/js/toast.js?v={{APP_VERSION}}'></script>
+<script src='/static/js/footer.js?v={{APP_VERSION}}'></script>
+<script>
+const ADMIN_API = '/admin/api';
+const state = {
+  enabled: false,
+  yaml: '',
+  selectedId: '',
+  selectedName: '',
+  proxies: [],
+};
+
+const yamlInput = document.getElementById('clash-yaml');
+const parseButton = document.getElementById('clash-parse');
+const applyButton = document.getElementById('clash-apply');
+const disableButton = document.getElementById('clash-disable');
+const inputStep = document.getElementById('clash-input-step');
+const selectStep = document.getElementById('clash-select-step');
+const rows = document.getElementById('clash-proxy-rows');
+const countLabel = document.getElementById('clash-count');
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll(String.fromCharCode(39), '&#39;');
+}
+
+async function callApi(method, path, body) {
+  const key = await adminKey.get();
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const response = await fetch(ADMIN_API + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || payload?.detail || '请求失败');
+  }
+  return payload;
+}
+
+function setStep(step) {
+  const selecting = step === 2;
+  inputStep.hidden = selecting;
+  selectStep.hidden = !selecting;
+  document.getElementById('step-label-1').classList.toggle('is-active', !selecting);
+  document.getElementById('step-label-2').classList.toggle('is-active', selecting);
+}
+
+function renderStatus() {
+  const status = document.getElementById('clash-status');
+  const currentName = document.getElementById('clash-current-name');
+  status.textContent = state.enabled ? '已启用' : '未启用';
+  status.classList.toggle('is-on', state.enabled);
+  currentName.textContent = state.enabled ? (state.selectedName || '已启用') : '未启用';
+  disableButton.disabled = !state.enabled;
+}
+
+function renderRows() {
+  const supported = state.proxies.filter(proxy => proxy.supported).length;
+  countLabel.textContent = `${state.proxies.length} 个节点，${supported} 个可用`;
+  if (!state.proxies.length) {
+    rows.innerHTML = `<tr><td colspan='4' class='clash-empty'>没有解析到代理节点</td></tr>`;
+    return;
+  }
+  rows.innerHTML = state.proxies.map(proxy => {
+    const disabled = !proxy.supported;
+    const checked = proxy.id === state.selectedId ? ' checked' : '';
+    const disabledAttr = disabled ? ' disabled' : '';
+    return `<tr class='${disabled ? 'is-disabled' : ''}'>
+      <td><label class='clash-choice'><input type='radio' name='clash-node' value='${escapeHtml(proxy.id)}'${checked}${disabledAttr}><span class='clash-node-name'>${escapeHtml(proxy.name)}</span></label></td>
+      <td>${escapeHtml(proxy.type)}</td>
+      <td>${escapeHtml(proxy.server)}${disabled ? `<div class='clash-reason'>${escapeHtml(proxy.reason)}</div>` : ''}</td>
+      <td>${escapeHtml(proxy.port || '-')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function firstSupportedId() {
+  return state.proxies.find(proxy => proxy.supported)?.id || '';
+}
+
+async function parseYaml() {
+  const raw = yamlInput.value.trim();
+  if (!raw) {
+    showToast('请输入 Clash YAML 内容', 'error');
+    return;
+  }
+  parseButton.disabled = true;
+  parseButton.textContent = '解析中…';
+  try {
+    const payload = await callApi('POST', '/proxy/clash/parse', { yaml: raw });
+    state.yaml = raw;
+    state.proxies = Array.isArray(payload.proxies) ? payload.proxies : [];
+    if (!state.proxies.some(proxy => proxy.id === state.selectedId && proxy.supported)) {
+      state.selectedId = firstSupportedId();
+    }
+    if (!state.selectedId) {
+      showToast('没有当前请求栈支持的节点', 'error');
+      renderRows();
+      setStep(2);
+      return;
+    }
+    renderRows();
+    setStep(2);
+  } catch (error) {
+    showToast(error.message || '解析失败', 'error');
+  } finally {
+    parseButton.disabled = false;
+    parseButton.textContent = '解析代理';
+  }
+}
+
+async function applyClash() {
+  if (!state.selectedId) {
+    showToast('请选择一个代理节点', 'error');
+    return;
+  }
+  applyButton.disabled = true;
+  applyButton.textContent = '应用中…';
+  try {
+    const payload = await callApi('POST', '/proxy/clash', {
+      yaml: state.yaml,
+      proxy_id: state.selectedId,
+      enabled: true,
+    });
+    state.enabled = !!payload.enabled;
+    state.yaml = payload.yaml || state.yaml;
+    state.selectedId = payload.selected_proxy_id || state.selectedId;
+    state.selectedName = payload.selected_proxy_name || '';
+    yamlInput.value = state.yaml;
+    renderStatus();
+    setStep(1);
+    showToast('Clash 代理已对所有账号启用', 'success');
+  } catch (error) {
+    showToast(error.message || '应用失败', 'error');
+  } finally {
+    applyButton.disabled = false;
+    applyButton.textContent = '启用并应用';
+  }
+}
+
+async function disableClash() {
+  if (!state.enabled) return;
+  disableButton.disabled = true;
+  try {
+    const payload = await callApi('POST', '/proxy/clash', { enabled: false });
+    state.enabled = !!payload.enabled;
+    state.selectedName = payload.selected_proxy_name || state.selectedName;
+    renderStatus();
+    showToast('Clash 代理已关闭', 'success');
+  } catch (error) {
+    disableButton.disabled = false;
+    showToast(error.message || '关闭失败', 'error');
+  }
+}
+
+rows.addEventListener('change', event => {
+  const input = event.target.closest('input[name=clash-node]');
+  if (input) state.selectedId = input.value;
+});
+parseButton.addEventListener('click', parseYaml);
+applyButton.addEventListener('click', applyClash);
+disableButton.addEventListener('click', disableClash);
+document.getElementById('clash-back').addEventListener('click', () => setStep(1));
+
+async function boot() {
+  try {
+    await renderAdminHeader?.();
+    await renderSiteFooter?.();
+    const key = await adminKey.get();
+    if (!key || !await verifyKey(ADMIN_API + '/verify', key).catch(() => false)) {
+      location.href = '/admin/login';
+      return;
+    }
+    const payload = await callApi('GET', '/proxy/clash');
+    state.enabled = !!payload.enabled;
+    state.yaml = payload.yaml || '';
+    state.selectedId = payload.selected_proxy_id || '';
+    state.selectedName = payload.selected_proxy_name || '';
+    yamlInput.value = state.yaml;
+    renderStatus();
+    setStep(1);
+  } catch (error) {
+    showToast(error.message || '页面加载失败', 'error');
+  }
+}
+
+boot();
+</script>
+</body>
+</html>

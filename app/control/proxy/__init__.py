@@ -75,8 +75,28 @@ class ProxyDirectory:
         res_url = cfg.get_str("proxy.egress.resource_proxy_url", "")
         base_pool = tuple(cfg.get_list("proxy.egress.proxy_pool", []))
         res_pool = tuple(cfg.get_list("proxy.egress.resource_proxy_pool", []))
+        if hasattr(cfg, 'get_bool'):
+            clash_enabled = cfg.get_bool('proxy.clash.enabled', False)
+        else:
+            clash_enabled = cfg.get_str('proxy.clash.enabled', '').strip().lower() in {
+                '1', 'true', 'yes', 'on'
+            }
+        clash_yaml = cfg.get_str('proxy.clash.yaml', '')
+        clash_proxy_id = cfg.get_str('proxy.clash.selected_proxy_id', '')
+        clash_url = cfg.get_str('proxy.clash.selected_url', '')
+        if clash_enabled and clash_url:
+            egress_mode = EgressMode.SINGLE_PROXY
+            base_url = clash_url
+            res_url = clash_url
+            base_pool = ()
+            res_pool = ()
+
         clearance = resolve_clearance_config(cfg)
         config_sig = (
+            clash_enabled,
+            clash_yaml,
+            clash_proxy_id,
+            clash_url,
             egress_mode.value,
             clearance_mode.value,
             base_url,
@@ -117,8 +137,6 @@ class ProxyDirectory:
         async with self._lock:
             if self._config_sig == config_sig:
                 return
-            from .models import ClearanceBundleState
-
             self._egress_mode = egress_mode
             self._clearance_mode = clearance_mode
             self._nodes = nodes
@@ -336,8 +354,6 @@ class ProxyDirectory:
         The next ``acquire()`` call for each affinity key will trigger a fresh
         FlareSolverr fetch (serialised by the single-flight guard).
         """
-        from .models import ClearanceBundleState
-
         async with self._lock:
             self._bundles = {
                 k: b.model_copy(update={"state": ClearanceBundleState.INVALID})
