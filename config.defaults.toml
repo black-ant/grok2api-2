@@ -98,6 +98,7 @@ skip_ssl_verify = false
 enabled = false
 # 原始 Clash YAML
 yaml = ''
+draft_yaml = ''
 # 当前选中的节点标识与名称
 selected_proxy_id = ''
 selected_proxy_name = ''

@@ -13,6 +13,7 @@ from app.control.proxy.clash import (
     parse_clash_yaml,
 )
 from app.control.proxy.kernels import KernelSpec, ProxyKernelManager
+from app.products.web.admin import proxy as admin_proxy
 
 
 class ClashProxyParserTests(unittest.TestCase):
@@ -108,6 +109,104 @@ class _FakeProxyConfig:
 
     def get_int(self, key, default=0):
         return self.values.get(key, default)
+
+
+class _FakeAdminConfig(_FakeProxyConfig):
+    def __init__(self, values=None):
+        super().__init__()
+        self.values.update(values or {})
+
+    async def update(self, patch):
+        for key, value in patch.get("proxy", {}).get("clash", {}).items():
+            self.values[f"proxy.clash.{key}"] = value
+
+    async def load(self):
+        return None
+
+
+class _FakeAdminBridge:
+    def __init__(self):
+        self.candidate = None
+        self.preferred = None
+        self.stopped = False
+
+    def statuses(self):
+        return []
+
+    def stop_all(self):
+        self.stopped = True
+
+    async def ensure_candidate(self, candidate, preferred, *, auto_download):
+        self.candidate = candidate
+        self.preferred = preferred
+        return candidate.proxy_url or "socks5://127.0.0.1:19001", preferred
+
+
+class ClashAdminPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_parse_persists_draft_and_state_restores_all_nodes(self):
+        old_yaml = """
+proxies:
+  - name: Old node
+    type: http
+    server: old.example.com
+    port: 8080
+"""
+        fake_config = _FakeAdminConfig(
+            {
+                "proxy.clash.yaml": old_yaml.strip(),
+                "proxy.clash.enabled": False,
+            }
+        )
+        bridge = _FakeAdminBridge()
+
+        with (
+            patch.object(admin_proxy, "config", fake_config),
+            patch.object(admin_proxy, "get_proxy_bridge_manager", return_value=bridge),
+        ):
+            parsed = await admin_proxy.parse_clash(
+                admin_proxy.ClashParseRequest(yaml=ClashProxyParserTests.sample_yaml)
+            )
+            state = await admin_proxy.get_clash_state()
+
+        saved_yaml = ClashProxyParserTests.sample_yaml.strip()
+        self.assertEqual(parsed["yaml"], saved_yaml)
+        self.assertEqual(fake_config.values["proxy.clash.draft_yaml"], saved_yaml)
+        self.assertEqual(fake_config.values["proxy.clash.yaml"], old_yaml.strip())
+        self.assertFalse(fake_config.values["proxy.clash.enabled"])
+        self.assertEqual(state["yaml"], saved_yaml)
+        self.assertEqual(state["total"], 3)
+        self.assertEqual(
+            [proxy["name"] for proxy in state["proxies"]],
+            ["HTTP 节点", "SOCKS 节点", "VMess 节点"],
+        )
+
+    async def test_apply_switches_saved_nodes_without_resubmitting_yaml(self):
+        saved_yaml = ClashProxyParserTests.sample_yaml.strip()
+        candidates = parse_clash_yaml(saved_yaml)
+        fake_config = _FakeAdminConfig(
+            {
+                "proxy.clash.yaml": "old-active-yaml",
+                "proxy.clash.draft_yaml": saved_yaml,
+            }
+        )
+        bridge = _FakeAdminBridge()
+
+        with (
+            patch.object(admin_proxy, "config", fake_config),
+            patch.object(admin_proxy, "get_proxy_bridge_manager", return_value=bridge),
+        ):
+            payload = await admin_proxy.apply_clash(
+                admin_proxy.ClashApplyRequest(
+                    proxy_id=candidates[1].proxy_id,
+                    selected_kernel="native",
+                )
+            )
+
+        self.assertEqual(bridge.candidate.name, "SOCKS 节点")
+        self.assertEqual(fake_config.values["proxy.clash.yaml"], saved_yaml)
+        self.assertEqual(fake_config.values["proxy.clash.draft_yaml"], saved_yaml)
+        self.assertEqual(payload["selected_proxy_name"], "SOCKS 节点")
+        self.assertEqual(payload["total"], 3)
 
 
 class ClashProxyRuntimeTests(unittest.IsolatedAsyncioTestCase):

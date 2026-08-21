@@ -32,15 +32,30 @@ class ClashApplyRequest(BaseModel):
 
 def _state() -> dict[str, Any]:
     bridge_manager = get_proxy_bridge_manager()
+    raw_yaml = _draft_yaml()
+    try:
+        candidates = parse_clash_yaml(raw_yaml) if raw_yaml else []
+    except ClashParseError:
+        candidates = []
     return {
         "scope": "global",
         "enabled": config.get_bool("proxy.clash.enabled", False),
-        "yaml": config.get_str("proxy.clash.yaml", ""),
+        "yaml": raw_yaml,
         "selected_proxy_id": config.get_str("proxy.clash.selected_proxy_id", ""),
         "selected_proxy_name": config.get_str("proxy.clash.selected_proxy_name", ""),
         "selected_kernel": config.get_str("proxy.clash.selected_kernel", "auto"),
+        "proxies": [candidate.public_dict() for candidate in candidates],
+        "total": len(candidates),
+        "supported": sum(1 for candidate in candidates if candidate.supported),
         "kernels": [status.public_dict() for status in bridge_manager.statuses()],
     }
+
+
+def _draft_yaml() -> str:
+    return (
+        config.get_str("proxy.clash.draft_yaml", "").strip()
+        or config.get_str("proxy.clash.yaml", "").strip()
+    )
 
 
 def _parse_error(exc: ClashParseError, *, param: str) -> ValidationError:
@@ -59,9 +74,13 @@ async def parse_clash(req: ClashParseRequest):
     except ClashParseError as exc:
         raise _parse_error(exc, param="yaml") from exc
 
+    raw_yaml = req.yaml.strip()
+    await config.update({"proxy": {"clash": {"draft_yaml": raw_yaml}}})
+    await config.load()
     public_candidates = [candidate.public_dict() for candidate in candidates]
     return {
         "scope": "global",
+        "yaml": raw_yaml,
         "proxies": public_candidates,
         "total": len(public_candidates),
         "supported": sum(1 for candidate in candidates if candidate.supported),
@@ -90,7 +109,7 @@ async def apply_clash(req: ClashApplyRequest):
         return {"status": "success", **_state()}
 
     raw_yaml = (
-        req.yaml if req.yaml is not None else config.get_str("proxy.clash.yaml", "")
+        req.yaml if req.yaml is not None else _draft_yaml()
     )
     try:
         candidate = find_clash_candidate(raw_yaml, req.proxy_id or "")
@@ -116,6 +135,7 @@ async def apply_clash(req: ClashApplyRequest):
             "clash": {
                 "enabled": True,
                 "yaml": raw_yaml.strip(),
+                "draft_yaml": raw_yaml.strip(),
                 "selected_proxy_id": candidate.proxy_id,
                 "selected_proxy_name": candidate.name,
                 "selected_kernel": selected_kernel,

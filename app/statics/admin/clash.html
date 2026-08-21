@@ -343,12 +343,15 @@ async function applyClash() {
     });
     state.enabled = !!payload.enabled;
     state.yaml = payload.yaml || state.yaml;
+    state.proxies = Array.isArray(payload.proxies) ? payload.proxies : state.proxies;
+    state.kernels = Array.isArray(payload.kernels) ? payload.kernels : state.kernels;
     state.selectedId = payload.selected_proxy_id || state.selectedId;
     state.selectedName = payload.selected_proxy_name || '';
     state.selectedKernel = payload.selected_kernel || state.selectedKernel;
     yamlInput.value = state.yaml;
     renderStatus();
-    setStep(1);
+    renderRows();
+    setStep(2);
     showToast('Clash 代理已对所有账号启用', 'success');
   } catch (error) {
     showToast(error.message || '应用失败', 'error');
@@ -367,10 +370,15 @@ async function disableClash() {
   try {
     const payload = await callApi('POST', '/proxy/clash', { enabled: false });
     state.enabled = !!payload.enabled;
+    state.yaml = payload.yaml || state.yaml;
+    state.proxies = Array.isArray(payload.proxies) ? payload.proxies : state.proxies;
     state.selectedName = payload.selected_proxy_name || state.selectedName;
     state.selectedKernel = payload.selected_kernel || state.selectedKernel;
     state.kernels = Array.isArray(payload.kernels) ? payload.kernels : state.kernels;
+    yamlInput.value = state.yaml;
     renderStatus();
+    renderRows();
+    if (state.proxies.length) setStep(2);
     showToast('Clash 代理已关闭', 'success');
   } catch (error) {
     disableButton.disabled = false;
@@ -429,13 +437,23 @@ async function boot() {
     const payload = await callApi('GET', '/proxy/clash');
     state.enabled = !!payload.enabled;
     state.yaml = payload.yaml || '';
+    state.proxies = Array.isArray(payload.proxies) ? payload.proxies : [];
     state.selectedId = payload.selected_proxy_id || '';
     state.selectedName = payload.selected_proxy_name || '';
     state.selectedKernel = payload.selected_kernel || 'auto';
     state.kernels = Array.isArray(payload.kernels) ? payload.kernels : [];
+    if (!state.proxies.some(proxy => proxy.id === state.selectedId && proxy.supported)) {
+      state.selectedId = firstSupportedId();
+    }
+    syncSelectedKernel();
     yamlInput.value = state.yaml;
     renderStatus();
-    setStep(1);
+    if (state.proxies.length) {
+      renderRows();
+      setStep(2);
+    } else {
+      setStep(1);
+    }
   } catch (error) {
     showToast(error.message || '页面加载失败', 'error');
   }
