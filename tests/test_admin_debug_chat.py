@@ -17,6 +17,17 @@ class AdminDebugChatPageTests(unittest.TestCase):
         self.assertIn("externalApiKeys = apiKeys(cfg?.app?.api_key)", html)
         self.assertIn("token-select').addEventListener('change'", html)
 
+    def test_debug_chat_can_select_a_proxy_without_changing_global_route(self):
+        html = Path("app/statics/admin/debug-chat.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="proxy-select"', html)
+        self.assertIn("apiFetch('/proxy/clash')", html)
+        self.assertIn("payload.pool_proxies", html)
+        self.assertNotIn("(payload.proxies || []).filter((item) => item.supported)", html)
+        self.assertIn("apiFetch('/debug/chat', requestOptions)", html)
+        self.assertIn("proxy_id: proxyId", html)
+        self.assertIn("'<option value=\"\">跟随全局代理</option>'", html)
+
     def test_debug_chat_marks_virtual_models(self):
         html = Path("app/statics/admin/debug-chat.html").read_text(encoding="utf-8")
 

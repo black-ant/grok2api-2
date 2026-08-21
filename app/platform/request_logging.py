@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import os
 import time
 import uuid
@@ -395,6 +396,24 @@ class RequestLogStore:
 
 
 request_log_store = RequestLogStore(retention_days=_DEFAULT_RETENTION_DAYS)
+_request_log_scope: ContextVar[dict[str, Any] | None] = ContextVar(
+    'request_log_scope',
+    default=None,
+)
+
+
+def record_proxy_lease(lease: Any) -> None:
+    scope = _request_log_scope.get()
+    if scope is None:
+        return
+    state = scope.setdefault('state', {})
+    routing = state.setdefault('request_log_routing', {})
+    if not isinstance(routing, dict):
+        routing = {}
+        state['request_log_routing'] = routing
+    to_log = getattr(lease, 'request_log_proxy', None)
+    if callable(to_log):
+        routing['proxy'] = to_log()
 
 
 class RequestLogMiddleware:
@@ -431,6 +450,7 @@ class RequestLogMiddleware:
         started_at = _utc_now_iso()
         log_date = _local_log_date()
         started_monotonic = time.perf_counter()
+        scope_token = _request_log_scope.set(scope)
 
         async def logging_receive() -> Message:
             nonlocal request_bytes, request_truncated
@@ -534,6 +554,7 @@ class RequestLogMiddleware:
                     **response_payload,
                 },
             }
+            _request_log_scope.reset(scope_token)
             try:
                 await request_log_store.add(entry)
             except Exception as log_exc:

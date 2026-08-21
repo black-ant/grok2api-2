@@ -6,6 +6,7 @@ configuration loading and clearance refresh lifecycle.
 """
 
 import asyncio
+from typing import Any
 from urllib.parse import urlparse
 
 from app.platform.logging.logger import logger
@@ -28,7 +29,13 @@ from .models import (
 from .providers.manual import ManualClearanceProvider
 from .providers.flaresolverr import FlareSolverrClearanceProvider
 from .bridge import KernelBridgeError, get_proxy_bridge_manager
-from .clash import ClashParseError, find_clash_candidate, parse_clash_yaml
+from .clash import (
+    ClashParseError,
+    ClashProxyCandidate,
+    find_clash_candidate,
+    parse_clash_yaml,
+)
+from app.platform.request_logging import record_proxy_lease
 
 _DEFAULT_CLEARANCE_ORIGIN = "https://grok.com"
 BundleKey = tuple[str, str]
@@ -43,6 +50,53 @@ def _clash_mapping(cfg, key: str) -> dict[str, str]:
         str(proxy_id): str(kernel).strip()
         for proxy_id, kernel in value.items()
         if str(proxy_id).strip() and str(kernel).strip()
+    }
+
+
+def _clash_speed_results(cfg) -> dict[str, dict[str, Any]]:
+    getter = getattr(cfg, 'get', None)
+    value = getter('proxy.clash.speed_results', {}) if getter else {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(proxy_id): result
+        for proxy_id, result in value.items()
+        if str(proxy_id).strip() and isinstance(result, dict)
+    }
+
+
+def _clash_egress_ip(results: dict[str, dict[str, Any]], proxy_id: str) -> str:
+    result = results.get(proxy_id) or {}
+    if result.get('state') != 'alive':
+        return ''
+    return str(result.get('egress_ip') or '').strip()
+
+
+def _clash_speed_signature(results: dict[str, dict[str, Any]]) -> tuple:
+    return tuple(
+        sorted(
+            (
+                proxy_id,
+                tuple(sorted((str(key), str(value)) for key, value in result.items())),
+            )
+            for proxy_id, result in results.items()
+        )
+    )
+
+
+def _clash_proxy_metadata(
+    candidate: ClashProxyCandidate,
+    kernel: str,
+    egress_ip: str,
+) -> dict[str, Any]:
+    return {
+        'proxy_id': candidate.proxy_id,
+        'proxy_name': candidate.name,
+        'proxy_type': candidate.proxy_type,
+        'proxy_server': candidate.server,
+        'proxy_port': candidate.port,
+        'proxy_kernel': kernel,
+        'egress_ip': egress_ip,
     }
 
 
@@ -90,6 +144,8 @@ class ProxyDirectory:
     async def load(self) -> None:
         """Load proxy configuration from the current config snapshot."""
         cfg = get_config()
+        clash_speed_results = _clash_speed_results(cfg)
+        clash_proxy_metadata: dict[str, dict[str, Any]] = {}
         egress_mode = EgressMode(cfg.get_str("proxy.egress.mode", "direct"))
         clearance_mode = ClearanceMode.parse(
             cfg.get_str("proxy.clearance.mode", "none")
@@ -145,12 +201,17 @@ class ProxyDirectory:
                                 candidate,
                                 preferred_kernel,
                                 auto_download=cfg.get_bool(
-                                    'proxy.kernels.auto_download', False
+                                    'proxy.kernels.auto_download', True
                                 ),
                             )
                         )
                         pool_urls.append(selected_url)
                         resolved_pool_kernels[proxy_id] = selected_kernel
+                        clash_proxy_metadata[selected_url] = _clash_proxy_metadata(
+                            candidate,
+                            selected_kernel,
+                            _clash_egress_ip(clash_speed_results, proxy_id),
+                        )
                     egress_mode = EgressMode.PROXY_POOL
                     base_pool = tuple(pool_urls)
                     res_pool = tuple(pool_urls)
@@ -166,8 +227,13 @@ class ProxyDirectory:
                         candidate,
                         clash_kernel,
                         auto_download=cfg.get_bool(
-                            'proxy.kernels.auto_download', False
+                            'proxy.kernels.auto_download', True
                         ),
+                    )
+                    clash_proxy_metadata[clash_url] = _clash_proxy_metadata(
+                        candidate,
+                        clash_kernel,
+                        _clash_egress_ip(clash_speed_results, clash_proxy_id),
                     )
                 except (ClashParseError, KernelBridgeError, RuntimeError) as exc:
                     raise RuntimeError(f'Clash 全局代理启动失败：{exc}') from exc
@@ -188,6 +254,7 @@ class ProxyDirectory:
             clash_pool_ids,
             tuple(sorted(clash_pool_kernels.items())),
             tuple(sorted(resolved_pool_kernels.items())),
+            _clash_speed_signature(clash_speed_results),
             egress_mode.value,
             clearance_mode.value,
             base_url,
@@ -207,18 +274,38 @@ class ProxyDirectory:
 
         if egress_mode == EgressMode.SINGLE_PROXY:
             if base_url:
-                nodes.append(EgressNode(node_id="single", proxy_url=base_url))
+                nodes.append(
+                    EgressNode(
+                        node_id="single",
+                        proxy_url=base_url,
+                        **clash_proxy_metadata.get(base_url, {}),
+                    )
+                )
             if res_url:
                 resource_nodes.append(
-                    EgressNode(node_id="res-single", proxy_url=res_url)
+                    EgressNode(
+                        node_id="res-single",
+                        proxy_url=res_url,
+                        **clash_proxy_metadata.get(res_url, {}),
+                    )
                 )
 
         elif egress_mode == EgressMode.PROXY_POOL:
             for i, url in enumerate(base_pool):
-                nodes.append(EgressNode(node_id=f"pool-{i}", proxy_url=url))
+                nodes.append(
+                    EgressNode(
+                        node_id=f"pool-{i}",
+                        proxy_url=url,
+                        **clash_proxy_metadata.get(url, {}),
+                    )
+                )
             for i, url in enumerate(res_pool):
                 resource_nodes.append(
-                    EgressNode(node_id=f"res-pool-{i}", proxy_url=url)
+                    EgressNode(
+                        node_id=f"res-pool-{i}",
+                        proxy_url=url,
+                        **clash_proxy_metadata.get(url, {}),
+                    )
                 )
 
         valid_affinities = {n.proxy_url or "direct" for n in [*nodes, *resource_nodes]}
@@ -264,12 +351,23 @@ class ProxyDirectory:
         kind: RequestKind = RequestKind.HTTP,
         resource: bool = False,
         clearance_origin: str | None = None,
+        proxy_url_override: str | None = None,
     ) -> ProxyLease:
         """Return a ProxyLease for the next request.
 
         For DIRECT mode, returns a lease with no proxy or clearance.
         """
-        proxy_url = await self._pick_proxy_url(resource=resource)
+        proxy_override = proxy_url_override is not None
+        proxy_url = (
+            str(proxy_url_override).strip()
+            if proxy_override
+            else await self._pick_proxy_url(resource=resource)
+        ) or None
+        proxy_node = (
+            None
+            if proxy_override or not proxy_url
+            else await self._find_node(proxy_url, resource)
+        )
         affinity = proxy_url or "direct"
         clearance_host = _clearance_host(clearance_origin)
 
@@ -279,9 +377,17 @@ class ProxyDirectory:
             clearance_origin=clearance_origin or _DEFAULT_CLEARANCE_ORIGIN,
         )
 
-        return ProxyLease(
+        lease = ProxyLease(
             lease_id=next_hex(),
             proxy_url=proxy_url,
+            proxy_override=proxy_override,
+            proxy_id=proxy_node.proxy_id if proxy_node else None,
+            proxy_name=proxy_node.proxy_name if proxy_node else '',
+            proxy_type=proxy_node.proxy_type if proxy_node else '',
+            proxy_server=proxy_node.proxy_server if proxy_node else '',
+            proxy_port=proxy_node.proxy_port if proxy_node else None,
+            proxy_kernel=proxy_node.proxy_kernel if proxy_node else '',
+            egress_ip=proxy_node.egress_ip if proxy_node else '',
             cf_cookies=bundle.cf_cookies if bundle else "",
             user_agent=bundle.user_agent if bundle else "",
             clearance_host=clearance_host,
@@ -289,6 +395,8 @@ class ProxyDirectory:
             kind=kind,
             acquired_at=now_ms(),
         )
+        record_proxy_lease(lease)
+        return lease
 
     async def feedback(self, lease: ProxyLease, result: ProxyFeedback) -> None:
         """Apply upstream feedback to the appropriate egress node."""
@@ -320,6 +428,7 @@ class ProxyDirectory:
         # same broken node.
         if (
             self._egress_mode == EgressMode.PROXY_POOL
+            and not lease.proxy_override
             and lease.proxy_url
             and result.kind
             in (
@@ -341,6 +450,17 @@ class ProxyDirectory:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    async def _find_node(
+        self,
+        proxy_url: str,
+        resource: bool,
+    ) -> EgressNode | None:
+        async with self._lock:
+            nodes = (
+                self._resource_nodes if resource and self._resource_nodes else self._nodes
+            )
+            return next((node for node in nodes if node.proxy_url == proxy_url), None)
 
     async def _pick_proxy_url(self, resource: bool = False) -> str | None:
         if self._egress_mode == EgressMode.DIRECT:
@@ -573,4 +693,49 @@ async def get_proxy_directory() -> ProxyDirectory:
     return _directory
 
 
-__all__ = ["ProxyDirectory", "get_proxy_directory"]
+async def acquire_clash_proxy_lease(proxy_id: str) -> tuple[ProxyLease, str]:
+    """Build a request-scoped lease for one configured Clash node."""
+    cfg = get_config()
+    raw_yaml = (
+        cfg.get_str("proxy.clash.draft_yaml", "").strip()
+        or cfg.get_str("proxy.clash.yaml", "").strip()
+    )
+    candidate = find_clash_candidate(raw_yaml, proxy_id)
+    configured_kernels = _clash_mapping(cfg, "proxy.clash.pool_kernels")
+    preferred_kernel = (
+        "native"
+        if candidate.kernels == ("native",)
+        else configured_kernels.get(candidate.proxy_id)
+    )
+    bridge_manager = get_proxy_bridge_manager()
+    selected_url, selected_kernel = await bridge_manager.ensure_candidate(
+        candidate,
+        preferred_kernel,
+        auto_download=cfg.get_bool("proxy.kernels.auto_download", True),
+    )
+    directory = await get_proxy_directory()
+    egress_ip = _clash_egress_ip(
+        _clash_speed_results(cfg),
+        candidate.proxy_id,
+    )
+    lease = await directory.acquire(proxy_url_override=selected_url)
+    lease = lease.model_copy(
+        update={
+            'proxy_id': candidate.proxy_id,
+            'proxy_name': candidate.name,
+            'proxy_type': candidate.proxy_type,
+            'proxy_server': candidate.server,
+            'proxy_port': candidate.port,
+            'proxy_kernel': selected_kernel,
+            'egress_ip': egress_ip,
+        }
+    )
+    record_proxy_lease(lease)
+    return lease, selected_kernel
+
+
+__all__ = [
+    "ProxyDirectory",
+    "acquire_clash_proxy_lease",
+    "get_proxy_directory",
+]

@@ -1,7 +1,8 @@
 """Control-plane proxy domain models."""
 
 from enum import IntEnum, StrEnum
-from typing import Self
+from typing import Any, Self
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
@@ -64,6 +65,13 @@ class ProxyFeedbackKind(StrEnum):
 class EgressNode(BaseModel):
     node_id:    str
     proxy_url:  str | None       = None  # None → direct
+    proxy_id:   str | None       = None
+    proxy_name: str               = ''
+    proxy_type: str               = ''
+    proxy_server: str             = ''
+    proxy_port: int | None        = None
+    proxy_kernel: str             = ''
+    egress_ip:  str               = ''
     scope:      ProxyScope       = ProxyScope.APP
     state:      EgressNodeState  = EgressNodeState.HEALTHY
     health:     float            = 1.0
@@ -84,6 +92,14 @@ class ClearanceBundle(BaseModel):
 class ProxyLease(BaseModel):
     lease_id:    str
     proxy_url:   str | None    = None
+    proxy_override: bool       = False
+    proxy_id:    str | None    = None
+    proxy_name:  str           = ''
+    proxy_type:  str           = ''
+    proxy_server: str          = ''
+    proxy_port:  int | None    = None
+    proxy_kernel: str          = ''
+    egress_ip:   str           = ''
     cf_cookies:  str           = ""
     user_agent:  str           = ""
     clearance_host: str        = "grok.com"
@@ -94,6 +110,34 @@ class ProxyLease(BaseModel):
     @property
     def has_proxy(self) -> bool:
         return bool(self.proxy_url)
+
+    def request_log_proxy(self) -> dict[str, Any]:
+        if not self.has_proxy:
+            return {
+                'mode': 'direct',
+                'egress_ip': self.egress_ip,
+            }
+
+        server = self.proxy_server.strip()
+        port = self.proxy_port
+        if self.proxy_url and not server:
+            try:
+                parsed = urlparse(self.proxy_url)
+                server = parsed.hostname or ''
+                port = parsed.port
+            except ValueError:
+                pass
+
+        return {
+            'mode': 'proxy',
+            'id': self.proxy_id or '',
+            'name': self.proxy_name,
+            'type': self.proxy_type,
+            'server': server,
+            'port': port,
+            'kernel': self.proxy_kernel,
+            'egress_ip': self.egress_ip,
+        }
 
 
 class ProxyFeedback(BaseModel):

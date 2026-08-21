@@ -122,8 +122,8 @@ test_concurrency = 4
 directory = 'data/proxy-kernels'
 # 桥接运行目录；节点配置含敏感凭据，仅写入本机
 work_directory = 'data/proxy-bridges'
-# 启用时是否自动下载缺失内核；默认关闭，避免无提示下载大文件
-auto_download = false
+# 启用时是否自动下载缺失内核；仅下载当前系统和架构所需的内核
+auto_download = true
 # 下载内核时使用的 HTTP/SOCKS 代理，可留空
 download_proxy_url = ''
 download_timeout_sec = 180

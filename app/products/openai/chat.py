@@ -20,6 +20,7 @@ from app.platform.tokens import (
 )
 from app.control.account.runtime import get_refresh_service
 from app.control.account.invalid_credentials import feedback_kind_for_error
+from app.control.proxy.models import ProxyLease
 from app.control.model.cooldown import (
     ModelAdmission,
     admit_model,
@@ -433,11 +434,12 @@ async def _stream_chat(
     tool_overrides: dict | None = None,
     model_config_override: dict | None = None,
     request_overrides: dict | None = None,
+    proxy_lease: ProxyLease | None = None,
     timeout_s: float = 120.0,
 ) -> AsyncGenerator[str, None]:
     """Yield raw SSE lines from the Grok app-chat endpoint."""
     proxy = await get_proxy_runtime()
-    lease = await proxy.acquire()
+    lease = proxy_lease if proxy_lease is not None else await proxy.acquire()
     attachments = await _prepare_file_attachments(token, files)
 
     payload = build_chat_payload(
@@ -517,6 +519,7 @@ async def completions(
     temperature: float = 0.8,
     top_p: float = 0.95,
     request_overrides: dict | None = None,
+    proxy_lease: ProxyLease | None = None,
     force_token: str | None = None,
     model_fallbacks: tuple[str, ...] = (),
     request_log_routing: dict[str, Any] | None = None,
@@ -544,17 +547,26 @@ async def completions(
     # ── Console API 路由 (console.x.ai/v1/responses) ─────────────────────────
     if spec.is_console_chat():
         from .console_chat import completions as console_completions
+        console_args = {
+            "model": model,
+            "messages": messages,
+            "stream": is_stream,
+            "emit_think": emit_think,
+            "temperature": temperature,
+            "top_p": top_p,
+            "force_token": force_token,
+            "model_fallbacks": model_fallbacks,
+            "request_log_routing": request_log_routing,
+        }
+        if proxy_lease is None:
+            return await console_completions(
+                **console_args,
+                reasoning_effort=reasoning_effort,
+            )
         return await console_completions(
-            model=model,
-            messages=messages,
-            stream=is_stream,
-            emit_think=emit_think,
+            **console_args,
             reasoning_effort=reasoning_effort,
-            temperature=temperature,
-            top_p=top_p,
-            force_token=force_token,
-            model_fallbacks=model_fallbacks,
-            request_log_routing=request_log_routing,
+            proxy_lease=proxy_lease,
         )
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -660,15 +672,18 @@ async def completions(
                         ended = False
                         sieve = ToolSieve(tool_names)
                         tool_calls_emitted = False
-                        async for line in _stream_chat(
-                            token=token,
-                            mode_id=ModeId(selected_mode_id),
-                            message=message,
-                            files=files,
-                            tool_overrides=tool_overrides,
-                            request_overrides=request_overrides,
-                            timeout_s=timeout_s,
-                        ):
+                        stream_kwargs = {
+                            "token": token,
+                            "mode_id": ModeId(selected_mode_id),
+                            "message": message,
+                            "files": files,
+                            "tool_overrides": tool_overrides,
+                            "request_overrides": request_overrides,
+                            "timeout_s": timeout_s,
+                        }
+                        if proxy_lease is not None:
+                            stream_kwargs["proxy_lease"] = proxy_lease
+                        async for line in _stream_chat(**stream_kwargs):
                             event_type, data = classify_line(line)
                             if event_type == "done":
                                 break
@@ -981,15 +996,18 @@ async def completions(
 
         try:
             try:
-                async for line in _stream_chat(
-                    token=token,
-                    mode_id=ModeId(selected_mode_id),
-                    message=message,
-                    files=files,
-                    tool_overrides=tool_overrides,
-                    request_overrides=request_overrides,
-                    timeout_s=timeout_s,
-                ):
+                stream_kwargs = {
+                    "token": token,
+                    "mode_id": ModeId(selected_mode_id),
+                    "message": message,
+                    "files": files,
+                    "tool_overrides": tool_overrides,
+                    "request_overrides": request_overrides,
+                    "timeout_s": timeout_s,
+                }
+                if proxy_lease is not None:
+                    stream_kwargs["proxy_lease"] = proxy_lease
+                async for line in _stream_chat(**stream_kwargs):
                     event_type, data = classify_line(line)
                     if event_type == "done":
                         break

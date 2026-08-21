@@ -479,7 +479,10 @@ class ProxyKernelBridgeManager:
             return candidate.proxy_url, kernel
         if not candidate.raw_node:
             raise KernelBridgeError("节点原始配置为空，无法生成内核配置")
-        binary = await self.kernel_manager.ensure(kernel, auto_download=auto_download)
+        try:
+            binary = await self.kernel_manager.ensure(kernel, auto_download=auto_download)
+        except RuntimeError as exc:
+            raise KernelBridgeError(str(exc)) from exc
         key = self._bridge_key(candidate, kernel)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -609,9 +612,28 @@ class ProxyKernelBridgeManager:
 
     @staticmethod
     def _free_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
+        last_error: OSError | None = None
+        exclusive_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        for _ in range(128):
+            tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                if exclusive_option is not None:
+                    tcp_sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
+                    udp_sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
+                tcp_sock.bind(("127.0.0.1", 0))
+                port = int(tcp_sock.getsockname()[1])
+                udp_sock.bind(("127.0.0.1", port))
+                return port
+            except OSError as exc:
+                last_error = exc
+            finally:
+                tcp_sock.close()
+                udp_sock.close()
+        detail = f": {last_error}" if last_error else ""
+        raise KernelBridgeError(
+            f"无法分配同时支持 TCP/UDP 的本地代理端口{detail}"
+        )
 
     async def _is_ready(self, bridge: _RunningBridge) -> bool:
         if bridge.process.poll() is not None:

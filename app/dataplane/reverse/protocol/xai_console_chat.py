@@ -32,6 +32,7 @@ from typing import Any, AsyncGenerator
 
 import orjson
 
+from app.control.proxy.models import ProxyLease
 from app.platform.errors import StreamIdleTimeout, UpstreamError, parse_retry_after
 from app.platform.config.snapshot import get_config
 from app.platform.logging.logger import logger
@@ -315,6 +316,7 @@ async def stream_console_chat(
     token: str,
     payload: dict[str, Any],
     *,
+    proxy_lease: ProxyLease | None = None,
     timeout_s: float = 120.0,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """POST to console.x.ai/v1/responses and yield (event_type, data) pairs.
@@ -327,7 +329,7 @@ async def stream_console_chat(
     from app.dataplane.reverse.runtime.endpoint_table import CONSOLE_RESPONSES
 
     proxy = await get_proxy_runtime()
-    lease = await proxy.acquire()
+    lease = proxy_lease if proxy_lease is not None else await proxy.acquire()
 
     headers = build_console_headers(token, lease=lease)
     payload_bytes = orjson.dumps(payload)

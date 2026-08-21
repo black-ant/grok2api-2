@@ -10,6 +10,20 @@
   <style>
     body { background:#FAF9F5 }
     .clash-main { max-width:1040px; padding-bottom:48px }
+    .clash-pool-table { min-width:980px }
+    .clash-pool-table tr.is-disabled td { color:#aaa49c; background:#fcfbf9 }
+    .clash-pool-kernel { color:#554d43; font-size:11px }
+    .clash-modal { width:min(980px, calc(100vw - 48px)); max-height:min(90vh, 860px); padding:0; overflow:hidden; display:flex; flex-direction:column }
+    .clash-modal-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px 14px; border-bottom:1px solid #eeeae2 }
+    .clash-modal-head .modal-title { margin:0; color:#27231f }
+    .clash-modal-close { width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #e6e1d8; border-radius:8px; background:#fff; color:#777066; cursor:pointer }
+    .clash-modal-close:hover { background:#fbfaf7; color:#27231f }
+    .clash-modal-close svg { width:16px; height:16px }
+    .clash-modal-body { min-height:0; overflow:auto; padding:18px 20px 20px }
+    .clash-modal .clash-panel { padding:0; border:0; border-radius:0; background:transparent }
+    .clash-modal .clash-yaml { min-height:320px }
+    .clash-modal .clash-table-wrap { max-height:360px }
+    .clash-modal .clash-selection-bar { align-items:flex-end }
     .page-hd { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px }
     .page-title { font-size:22px; font-weight:700; line-height:1.2 }
     .page-sub { margin-top:5px; color:var(--fg-muted); font-size:13px }
@@ -28,6 +42,7 @@
     .clash-step-line { width:28px; height:1px; background:#e2ddd4 }
     .clash-panel { padding:18px; border:1px solid #ece8df; border-radius:14px; background:#fff }
     .clash-panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px }
+    .clash-panel-head-actions { display:flex; align-items:center; gap:8px }
     .clash-panel-title { color:#27231f; font-size:13px; font-weight:700 }
     .clash-count { color:#8d877d; font-size:12px }
     .clash-yaml { width:100%; min-height:360px; padding:12px; resize:vertical; border:1px solid #e6e1d8; border-radius:10px; background:#fbfaf7; color:#302b26; font:12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace }
@@ -80,6 +95,10 @@
       .clash-yaml { min-height:300px }
       .clash-actions { justify-content:stretch }
       .clash-actions .btn { flex:1 }
+      #clash-import-modal { padding:0 }
+      .clash-modal { width:100%; max-height:100vh; height:100%; border-radius:0 }
+      .clash-modal-head, .clash-modal-body { padding-left:12px; padding-right:12px }
+      .clash-modal .clash-selection-bar { align-items:stretch; flex-direction:column }
     }
   </style>
 </head>
@@ -88,10 +107,7 @@
 
 <main class='admin-main clash-main'>
   <div class='page-hd'>
-    <div>
-      <div class='page-title'>Clash代理</div>
-      <div class='page-sub'>导入 YAML，选择一个节点后对所有账号生效。</div>
-    </div>
+    <div class='page-title'>Clash代理</div>
     <div id='clash-status' class='clash-status'>未启用</div>
   </div>
 
@@ -104,57 +120,87 @@
     <button id='clash-disable' class='btn clash-btn-danger' type='button' hidden>关闭代理</button>
   </div>
 
-  <div class='clash-steps' aria-label='Clash配置流程'>
-    <div id='step-label-1' class='clash-step is-active'><span class='clash-step-index'>1</span><span>录入 YAML</span></div>
-    <span class='clash-step-line'></span>
-    <div id='step-label-2' class='clash-step'><span class='clash-step-index'>2</span><span>选择节点</span></div>
-  </div>
-
-  <section id='clash-input-step' class='clash-panel'>
+  <section id='clash-pool-panel' class='clash-panel'>
     <div class='clash-panel-head'>
-      <div class='clash-panel-title'>Clash YAML</div>
-      <span class='clash-count'>仅解析 proxies</span>
+      <div>
+        <div class='clash-panel-title'>代理池</div>
+        <span id='clash-pool-count' class='clash-count'></span>
+      </div>
+      <div class='clash-panel-head-actions'>
+        <button id='clash-pool-test' class='btn clash-test-button' type='button'>测速</button>
+        <button id='clash-open-import' class='btn btn-primary' type='button'>导入节点</button>
+      </div>
     </div>
-    <textarea id='clash-yaml' class='clash-yaml' spellcheck='false' placeholder='proxies:
+    <div class='clash-table-wrap'>
+      <table class='clash-table clash-pool-table'>
+        <thead><tr><th style='width:26%'>节点</th><th style='width:11%'>类型</th><th style='width:22%'>服务器</th><th style='width:9%'>端口</th><th style='width:13%'>代理内核</th><th style='width:9%'>状态</th><th style='width:10%'>延迟</th></tr></thead>
+        <tbody id='clash-pool-rows'></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div id='clash-import-modal' class='modal-overlay' aria-hidden='true'>
+  <div class='modal clash-modal' role='dialog' aria-modal='true' aria-labelledby='clash-modal-title'>
+    <div class='clash-modal-head'>
+      <div id='clash-modal-title' class='modal-title'>导入代理节点</div>
+      <button id='clash-modal-close' class='clash-modal-close' type='button' aria-label='关闭'>
+        <svg viewBox='0 0 20 20' aria-hidden='true'><path d='M5 5l10 10M15 5L5 15' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'/></svg>
+      </button>
+    </div>
+    <div class='clash-modal-body'>
+      <div class='clash-steps' aria-label='Clash导入流程'>
+        <div id='step-label-1' class='clash-step is-active'><span class='clash-step-index'>1</span><span>录入 YAML</span></div>
+        <span class='clash-step-line'></span>
+        <div id='step-label-2' class='clash-step'><span class='clash-step-index'>2</span><span>选择节点</span></div>
+      </div>
+
+      <section id='clash-input-step' class='clash-panel'>
+        <div class='clash-panel-head'>
+          <div class='clash-panel-title'>Clash YAML</div>
+          <span class='clash-count'>仅解析 proxies</span>
+        </div>
+        <textarea id='clash-yaml' class='clash-yaml' spellcheck='false' placeholder='proxies:
   - name: 节点名称
     type: socks5
     server: 127.0.0.1
     port: 7891'></textarea>
-    <div class='clash-actions'>
-      <button id='clash-parse' class='btn btn-primary' type='button'>解析代理</button>
-    </div>
-  </section>
+        <div class='clash-actions'>
+          <button id='clash-cancel-input' class='btn btn-ghost' type='button'>取消</button>
+          <button id='clash-parse' class='btn btn-primary' type='button'>解析代理</button>
+        </div>
+      </section>
 
-  <section id='clash-select-step' class='clash-panel' hidden>
-    <div class='clash-panel-head'>
-      <div class='clash-panel-title'>选择加入代理池的节点</div>
-      <span id='clash-count' class='clash-count'></span>
+      <section id='clash-select-step' class='clash-panel' hidden>
+        <div class='clash-panel-head'>
+          <div class='clash-panel-title'>选择加入代理池的节点</div>
+          <span id='clash-count' class='clash-count'></span>
+        </div>
+        <div class='clash-table-wrap'>
+          <table class='clash-table'>
+            <thead><tr><th style='width:31%'>节点</th><th style='width:13%'>类型</th><th style='width:23%'>服务器</th><th style='width:11%'>端口</th><th style='width:11%'>状态</th><th style='width:11%'>延迟</th></tr></thead>
+            <tbody id='clash-proxy-rows'></tbody>
+          </table>
+        </div>
+        <div class='clash-selection-bar'>
+          <span id='clash-selection-summary'>未选择节点</span>
+          <div class='clash-actions'>
+            <button id='clash-back' class='btn btn-ghost' type='button'>返回修改</button>
+            <button id='clash-test' class='btn clash-test-button' type='button'>重新测速</button>
+            <button id='clash-apply' class='btn btn-primary' type='button'>保存到代理池并启用</button>
+          </div>
+        </div>
+        <div class='clash-kernel-box'>
+          <div class='clash-kernel-head'>
+            <div class='clash-kernel-title'>选择代理内核</div>
+            <span id='clash-kernel-hint' class='clash-count'></span>
+          </div>
+          <div id='clash-kernel-list' class='clash-kernel-list'></div>
+        </div>
+      </section>
     </div>
-    <div class='clash-table-wrap'>
-      <table class='clash-table'>
-        <thead><tr><th style='width:31%'>节点</th><th style='width:13%'>类型</th><th style='width:23%'>服务器</th><th style='width:11%'>端口</th><th style='width:11%'>状态</th><th style='width:11%'>延迟</th></tr></thead>
-        <tbody id='clash-proxy-rows'></tbody>
-      </table>
-    </div>
-    <div class='clash-selection-bar'>
-      <span id='clash-selection-summary'>未选择节点</span>
-      <div class='clash-actions'>
-        <button id='clash-test' class='btn clash-test-button' type='button'>重新测速</button>
-        <button id='clash-apply' class='btn btn-primary' type='button'>加入池子并启用</button>
-      </div>
-    </div>
-    <div class='clash-kernel-box'>
-      <div class='clash-kernel-head'>
-        <div class='clash-kernel-title'>选择代理内核</div>
-        <span id='clash-kernel-hint' class='clash-count'></span>
-      </div>
-      <div id='clash-kernel-list' class='clash-kernel-list'></div>
-    </div>
-    <div class='clash-actions'>
-      <button id='clash-back' class='btn btn-ghost' type='button'>返回修改</button>
-    </div>
-  </section>
-</main>
+  </div>
+</div>
 
 <script src='/static/js/i18n.js?v={{APP_VERSION}}'></script>
 <script src='/static/js/auth.js?v={{APP_VERSION}}'></script>
@@ -175,14 +221,34 @@ const state = {
   testingIds: [],
 };
 
+const poolState = {
+  enabled: false,
+  yaml: '',
+  selectedName: '',
+  selectedKernel: 'auto',
+  kernels: [],
+  proxies: [],
+  poolProxies: [],
+  poolIds: [],
+  testing: false,
+  testingIds: [],
+};
+
 const yamlInput = document.getElementById('clash-yaml');
 const parseButton = document.getElementById('clash-parse');
 const testButton = document.getElementById('clash-test');
 const applyButton = document.getElementById('clash-apply');
 const disableButton = document.getElementById('clash-disable');
+const openImportButton = document.getElementById('clash-open-import');
+const poolTestButton = document.getElementById('clash-pool-test');
+const importModal = document.getElementById('clash-import-modal');
+const modalCloseButton = document.getElementById('clash-modal-close');
+const cancelInputButton = document.getElementById('clash-cancel-input');
 const inputStep = document.getElementById('clash-input-step');
 const selectStep = document.getElementById('clash-select-step');
 const rows = document.getElementById('clash-proxy-rows');
+const poolRows = document.getElementById('clash-pool-rows');
+const poolCountLabel = document.getElementById('clash-pool-count');
 const countLabel = document.getElementById('clash-count');
 const selectionSummary = document.getElementById('clash-selection-summary');
 const kernelList = document.getElementById('clash-kernel-list');
@@ -213,6 +279,61 @@ async function callApi(method, path, body) {
   return payload;
 }
 
+async function streamApi(method, path, body, onEvent) {
+  const key = await adminKey.get();
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const response = await fetch(ADMIN_API + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.error?.message || payload?.detail || '请求失败');
+  }
+  if (!response.body) throw new Error('浏览器不支持测速流');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consumeFrame = frame => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n');
+    if (data) onEvent(JSON.parse(data));
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() || '';
+    frames.forEach(consumeFrame);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeFrame(buffer);
+}
+
+function openImportModal() {
+  resetDraftFromPool();
+  setStep(1);
+  importModal.classList.add('open');
+  importModal.setAttribute('aria-hidden', 'false');
+  window.setTimeout(() => yamlInput.focus(), 0);
+}
+
+function closeImportModal() {
+  if (state.testing) {
+    showToast('测速进行中，请等待完成', 'info');
+    return;
+  }
+  importModal.classList.remove('open');
+  importModal.setAttribute('aria-hidden', 'true');
+}
+
 function setStep(step) {
   const selecting = step === 2;
   inputStep.hidden = selecting;
@@ -221,29 +342,61 @@ function setStep(step) {
   document.getElementById('step-label-2').classList.toggle('is-active', selecting);
 }
 
-function applyPayload(payload) {
-  state.enabled = !!payload.enabled;
+function cloneProxy(proxy) {
+  return { ...proxy, speed: proxy.speed ? { ...proxy.speed } : {} };
+}
+
+function applyPoolPayload(payload) {
+  poolState.enabled = !!payload.enabled;
+  poolState.yaml = payload.committed_yaml || poolState.yaml;
+  poolState.proxies = Array.isArray(payload.committed_proxies)
+    ? payload.committed_proxies.map(cloneProxy)
+    : poolState.proxies;
+  const poolProxies = Array.isArray(payload.pool_proxies)
+    ? payload.pool_proxies
+    : poolState.proxies.filter(proxy => payload.pool_proxy_ids?.includes(proxy.id));
+  poolState.poolProxies = poolProxies.map(cloneProxy);
+  poolState.poolIds = Array.isArray(payload.pool_proxy_ids) ? [...payload.pool_proxy_ids] : poolState.poolIds;
+  poolState.selectedName = payload.selected_proxy_name || poolState.selectedName;
+  poolState.selectedKernel = payload.selected_kernel || poolState.selectedKernel;
+  poolState.kernels = Array.isArray(payload.kernels) ? payload.kernels.map(item => ({ ...item })) : poolState.kernels;
+}
+
+function applyDraftPayload(payload) {
   state.yaml = payload.yaml || state.yaml;
-  state.proxies = Array.isArray(payload.proxies) ? payload.proxies : state.proxies;
-  state.poolIds = Array.isArray(payload.pool_proxy_ids) ? payload.pool_proxy_ids : state.poolIds;
+  state.proxies = Array.isArray(payload.proxies) ? payload.proxies.map(cloneProxy) : state.proxies;
+  state.poolIds = Array.isArray(payload.pool_proxy_ids) ? [...payload.pool_proxy_ids] : state.poolIds;
   state.selectedName = payload.selected_proxy_name || state.selectedName;
   state.selectedKernel = payload.selected_kernel || state.selectedKernel;
-  state.kernels = Array.isArray(payload.kernels) ? payload.kernels : state.kernels;
+  state.kernels = Array.isArray(payload.kernels) ? payload.kernels.map(item => ({ ...item })) : state.kernels;
+  yamlInput.value = state.yaml;
+}
+
+function resetDraftFromPool() {
+  state.yaml = poolState.yaml;
+  state.proxies = poolState.proxies.map(cloneProxy);
+  state.poolIds = [...poolState.poolIds];
+  state.selectedIds = state.poolIds.filter(proxyId => state.proxies.some(proxy => proxy.id === proxyId && proxy.supported));
+  state.selectedName = poolState.selectedName;
+  state.selectedKernel = poolState.selectedKernel;
+  state.kernels = poolState.kernels.map(item => ({ ...item }));
+  state.testing = false;
+  state.testingIds = [];
   yamlInput.value = state.yaml;
 }
 
 function renderStatus() {
   const status = document.getElementById('clash-status');
   const currentName = document.getElementById('clash-current-name');
-  status.textContent = state.enabled ? '已启用' : '未启用';
-  status.classList.toggle('is-on', state.enabled);
-  const poolName = state.poolIds.length > 1
-    ? `代理池（${state.poolIds.length} 个节点）`
-    : state.selectedName || '已启用';
-  currentName.textContent = state.enabled ? poolName : '未启用';
-  disableButton.hidden = !state.enabled;
+  status.textContent = poolState.enabled ? '已启用' : '未启用';
+  status.classList.toggle('is-on', poolState.enabled);
+  const poolName = poolState.poolIds.length > 1
+    ? `代理池（${poolState.poolIds.length} 个节点）`
+    : poolState.selectedName || '已启用';
+  currentName.textContent = poolState.enabled ? poolName : '未启用';
+  disableButton.hidden = !poolState.enabled;
   disableButton.disabled = false;
-  disableButton.title = state.enabled ? '关闭全局 Clash 代理' : '';
+  disableButton.title = poolState.enabled ? '关闭全局 Clash 代理' : '';
 }
 
 function selectedProxies() {
@@ -321,8 +474,8 @@ function renderKernels() {
   updateApplyButton();
 }
 
-function speedState(proxy) {
-  if (state.testingIds.includes(proxy.id)) {
+function speedState(proxy, testingIds = state.testingIds) {
+  if (testingIds.includes(proxy.id)) {
     return `<span class='clash-speed is-pending'>测速中…</span>`;
   }
   const speed = proxy.speed || {};
@@ -350,6 +503,81 @@ function speedLatency(proxy) {
     return escapeHtml(speed.error || '-');
   }
   return '-';
+}
+
+function renderPoolRows() {
+  poolCountLabel.textContent = `${poolState.poolIds.length} 个节点`;
+  if (!poolState.poolProxies.length) {
+    poolRows.innerHTML = `<tr><td colspan='7' class='clash-empty'>代理池暂无节点，请点击“导入节点”</td></tr>`;
+    poolTestButton.disabled = true;
+    return;
+  }
+  poolRows.innerHTML = poolState.poolProxies.map(proxy => {
+    const disabled = !proxy.supported;
+    return `<tr class='${disabled ? 'is-disabled' : ''}'>
+      <td><span class='clash-node-name'>${escapeHtml(proxy.name)}</span>${disabled ? `<div class='clash-reason'>${escapeHtml(proxy.reason)}</div>` : ''}</td>
+      <td>${escapeHtml(proxy.type)}</td>
+      <td>${escapeHtml(proxy.server)}</td>
+      <td>${escapeHtml(proxy.port || '-')}</td>
+      <td><span class='clash-pool-kernel'>${escapeHtml(proxy.pool_kernel || '自动')}</span></td>
+      <td>${speedState(proxy, poolState.testingIds)}</td>
+      <td>${speedLatency(proxy)}</td>
+    </tr>`;
+  }).join('');
+  poolTestButton.disabled = poolState.testing || !poolState.poolProxies.some(proxy => proxy.supported);
+}
+
+async function testPoolProxies() {
+  const proxyIds = poolState.poolProxies.filter(proxy => proxy.supported).map(proxy => proxy.id);
+  if (!proxyIds.length || poolState.testing) return;
+  const initialPoolCount = poolState.poolIds.length;
+  poolState.testing = true;
+  poolState.testingIds = [...proxyIds];
+  poolTestButton.disabled = true;
+  poolTestButton.textContent = `测速中… 0/${proxyIds.length}`;
+  renderPoolRows();
+  let streamDone = false;
+  try {
+    await streamApi('POST', '/proxy/clash/test/stream', {
+      proxy_ids: proxyIds,
+      formal_pool: true,
+    }, event => {
+      if (event.type === 'result') {
+        const proxy = poolState.poolProxies.find(item => item.id === event.proxy_id);
+        if (proxy) proxy.speed = event.result || {};
+        poolState.testingIds = poolState.testingIds.filter(proxyId => proxyId !== event.proxy_id);
+        const completed = Number(event.completed) || (proxyIds.length - poolState.testingIds.length);
+        const total = Number(event.total) || proxyIds.length;
+        poolTestButton.textContent = `测速中… ${completed}/${total}`;
+        renderPoolRows();
+        return;
+      }
+      if (event.type === 'done') {
+        streamDone = true;
+        if (event.state) applyPoolPayload(event.state);
+        renderStatus();
+        renderPoolRows();
+        return;
+      }
+      if (event.type === 'error') {
+        throw new Error(event.message || '测速失败');
+      }
+    });
+    if (!streamDone) throw new Error('测速流意外结束');
+    const removedCount = Math.max(0, initialPoolCount - poolState.poolIds.length);
+    showToast(
+      removedCount ? `测速完成，已自动关闭 ${removedCount} 个失败节点` : '测速完成，代理池节点均在线',
+      removedCount ? 'info' : 'success',
+    );
+  } catch (error) {
+    showToast(error.message || '测速失败', 'error');
+  } finally {
+    poolState.testing = false;
+    poolState.testingIds = [];
+    poolTestButton.disabled = false;
+    poolTestButton.textContent = '测速';
+    renderPoolRows();
+  }
 }
 
 function renderRows() {
@@ -386,19 +614,40 @@ async function testProxies() {
   state.testing = true;
   state.testingIds = proxyIds;
   testButton.disabled = true;
-  testButton.textContent = '测速中…';
+  testButton.textContent = `测速中… 0/${proxyIds.length}`;
   renderRows();
+  let streamDone = false;
   try {
-    const payload = await callApi('POST', '/proxy/clash/test', {
+    await streamApi('POST', '/proxy/clash/test/stream', {
       yaml: state.yaml,
       proxy_ids: proxyIds,
       selected_kernel: state.selectedKernel === 'auto' ? null : state.selectedKernel,
+    }, event => {
+      if (event.type === 'result') {
+        const proxy = state.proxies.find(item => item.id === event.proxy_id);
+        if (proxy) proxy.speed = event.result || {};
+        state.testingIds = state.testingIds.filter(proxyId => proxyId !== event.proxy_id);
+        const completed = Number(event.completed) || (proxyIds.length - state.testingIds.length);
+        const total = Number(event.total) || proxyIds.length;
+        testButton.textContent = `测速中… ${completed}/${total}`;
+        renderRows();
+        return;
+      }
+      if (event.type === 'done') {
+        streamDone = true;
+        const selectedIds = [...state.selectedIds];
+        if (event.state) {
+          applyDraftPayload(event.state);
+          state.selectedIds = selectedIds.filter(proxyId => state.proxies.some(proxy => proxy.id === proxyId));
+          renderRows();
+        }
+        return;
+      }
+      if (event.type === 'error') {
+        throw new Error(event.message || '测速失败');
+      }
     });
-    const selectedIds = [...state.selectedIds];
-    applyPayload(payload);
-    state.selectedIds = selectedIds.filter(proxyId => state.proxies.some(proxy => proxy.id === proxyId));
-    renderStatus();
-    renderRows();
+    if (!streamDone) throw new Error('测速流意外结束');
   } catch (error) {
     showToast(error.message || '测速失败', 'error');
   } finally {
@@ -420,10 +669,9 @@ async function parseYaml() {
   parseButton.textContent = '解析中…';
   try {
     const payload = await callApi('POST', '/proxy/clash/parse', { yaml: raw });
-    applyPayload(payload);
+    applyDraftPayload(payload);
     state.selectedIds = state.poolIds.filter(proxyId => state.proxies.some(proxy => proxy.id === proxyId && proxy.supported));
     syncSelectedKernel();
-    renderStatus();
     renderRows();
     setStep(2);
     await testProxies();
@@ -450,12 +698,11 @@ async function applyClash() {
       selected_kernel: state.selectedKernel === 'auto' ? null : state.selectedKernel,
       enabled: true,
     });
-    applyPayload(payload);
-    state.selectedIds = [...state.poolIds];
+    applyPoolPayload(payload);
     renderStatus();
-    renderRows();
-    setStep(2);
-    showToast(`已加入代理池，共 ${state.poolIds.length} 个节点`, 'success');
+    renderPoolRows();
+    closeImportModal();
+    showToast(`已保存到代理池，共 ${poolState.poolIds.length} 个节点`, 'success');
   } catch (error) {
     showToast(error.message || '加入代理池失败', 'error');
   } finally {
@@ -465,18 +712,16 @@ async function applyClash() {
 }
 
 async function disableClash() {
-  if (!state.enabled) {
+  if (!poolState.enabled) {
     showToast('Clash 代理当前未启用', 'info');
     return;
   }
   disableButton.disabled = true;
   try {
     const payload = await callApi('POST', '/proxy/clash', { enabled: false });
-    applyPayload(payload);
-    state.selectedIds = [...state.poolIds];
+    applyPoolPayload(payload);
     renderStatus();
-    renderRows();
-    if (state.proxies.length) setStep(2);
+    renderPoolRows();
     showToast('Clash 代理已关闭，代理池配置保留', 'success');
   } catch (error) {
     disableButton.disabled = false;
@@ -511,10 +756,9 @@ kernelList.addEventListener('click', async event => {
     await callApi('POST', `/proxy/clash/kernels/${encodeURIComponent(kernel)}/download`);
     const payload = await callApi('GET', '/proxy/clash');
     const selectedIds = [...state.selectedIds];
-    applyPayload(payload);
+    applyDraftPayload(payload);
     state.selectedIds = selectedIds;
     state.selectedKernel = kernel;
-    renderStatus();
     renderRows();
     showToast(`${kernel} 内核已准备`, 'success');
   } catch (error) {
@@ -523,8 +767,18 @@ kernelList.addEventListener('click', async event => {
     showToast(error.message || '内核准备失败', 'error');
   }
 });
+openImportButton.addEventListener('click', openImportModal);
+modalCloseButton.addEventListener('click', closeImportModal);
+cancelInputButton.addEventListener('click', closeImportModal);
+importModal.addEventListener('click', event => {
+  if (event.target === importModal) closeImportModal();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && importModal.classList.contains('open')) closeImportModal();
+});
 parseButton.addEventListener('click', parseYaml);
 testButton.addEventListener('click', testProxies);
+poolTestButton.addEventListener('click', testPoolProxies);
 applyButton.addEventListener('click', applyClash);
 disableButton.addEventListener('click', disableClash);
 document.getElementById('clash-back').addEventListener('click', () => setStep(1));
@@ -539,18 +793,9 @@ async function boot() {
       return;
     }
     const payload = await callApi('GET', '/proxy/clash');
-    applyPayload(payload);
-    state.selectedIds = state.poolIds.filter(proxyId => state.proxies.some(proxy => proxy.id === proxyId && proxy.supported));
-    syncSelectedKernel();
+    applyPoolPayload(payload);
     renderStatus();
-    if (state.proxies.length) {
-      renderRows();
-      setStep(2);
-      const needsTest = state.proxies.some(proxy => proxy.supported && !proxy.speed?.tested_at);
-      if (needsTest) await testProxies();
-    } else {
-      setStep(1);
-    }
+    renderPoolRows();
   } catch (error) {
     showToast(error.message || '页面加载失败', 'error');
   }

@@ -21,7 +21,7 @@
     .field input,.field select { height:38px; padding:0 10px }
     .field textarea { min-height:160px; padding:10px; resize:vertical; line-height:1.5 }
     .inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px }
-    .top-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+    .top-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px }
     .debug-actions { display:flex; align-items:center; gap:8px }
     .debug-actions .btn { min-width:96px }
     .debug-status { font-size:12px; color:#777 }
@@ -66,6 +66,12 @@
           <option value="">加载中…</option>
         </select>
         <input class="manual-token" id="manual-token-input" type="text" placeholder="2API key 由 app.api_key 提供" disabled>
+      </div>
+      <div class="field">
+        <label for="proxy-select">测试代理</label>
+        <select id="proxy-select" disabled>
+          <option value="">加载中…</option>
+        </select>
       </div>
     </div>
   </section>
@@ -194,6 +200,10 @@ function buildPayload() {
   };
 }
 
+function selectedProxyId() {
+  return document.getElementById('proxy-select').value.trim();
+}
+
 async function apiFetch(path, options = {}) {
   const headers = { Authorization: `Bearer ${adminAuthKey}`, ...(options.headers || {}) };
   const res = await fetch(`${ADMIN_API}${path}`, { ...options, headers, cache: 'no-store' });
@@ -257,6 +267,19 @@ async function loadExternalAuth() {
   select.disabled = false;
 }
 
+async function loadDebugProxies() {
+  const select = document.getElementById('proxy-select');
+  const payload = await apiFetch('/proxy/clash');
+  const proxies = (payload.pool_proxies || []).filter((item) => item.supported);
+  select.innerHTML = [
+    '<option value="">跟随全局代理</option>',
+    ...proxies.map((item) => (
+      `<option value="${esc(item.id)}">${esc(item.name)} · ${esc(item.type)} · ${esc(item.server)}:${esc(item.port)}</option>`
+    )),
+  ].join('');
+  select.disabled = false;
+}
+
 function syncManualTokenInput() {
   const input = document.getElementById('manual-token-input');
   input.classList.remove('is-open');
@@ -266,22 +289,28 @@ async function sendDebugChat() {
   const button = document.getElementById('send-btn');
   const payload = buildPayload();
   if (!payload.model || !payload.messages.at(-1)?.content) return;
+  const proxyId = selectedProxyId();
+  const requestPayload = proxyId ? { ...payload, proxy_id: proxyId } : payload;
+  const requestPath = proxyId ? '/debug/chat' : '/v1/chat/completions';
   button.disabled = true;
   setStatus('调用中…');
-  setDebugResult(payload, '等待返回…', ['等待返回']);
+  setDebugResult(requestPayload, '等待返回…', ['等待返回']);
   try {
     const started = Date.now();
-    const result = await externalFetch('/v1/chat/completions', {
+    const requestOptions = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+      body: JSON.stringify(requestPayload),
+    };
+    const result = proxyId
+      ? await apiFetch('/debug/chat', requestOptions)
+      : await externalFetch('/v1/chat/completions', requestOptions);
     const elapsed = Date.now() - started;
-    setDebugResult(payload, result, [payload.model, '/v1/chat/completions', `${elapsed} ms`, '成功']);
+    setDebugResult(requestPayload, result, [payload.model, requestPath, proxyId || '全局代理', `${elapsed} ms`, '成功']);
     setStatus('调用完成');
     window.showToast?.('调用完成', 'success');
   } catch (error) {
-    setDebugResult(payload, { status: error.status || 0, message: error.message, body: error.body || null }, ['失败']);
+    setDebugResult(requestPayload, { status: error.status || 0, message: error.message, body: error.body || null }, ['失败']);
     setStatus('调用失败');
     window.showToast?.('调用失败', 'error');
   } finally {
@@ -338,8 +367,19 @@ function waitI18n() {
   } catch (error) {
     document.getElementById('token-select').innerHTML = '<option value="">2API 鉴权加载失败</option>';
   }
+  let proxyReady = false;
+  try {
+    await loadDebugProxies();
+    proxyReady = true;
+  } catch (error) {
+    document.getElementById('proxy-select').innerHTML = '<option value="">代理列表加载失败，使用全局代理</option>';
+  }
   syncManualTokenInput();
-  setStatus(modelReady && authReady ? '模型和外部鉴权已加载' : '模型或外部鉴权加载失败');
+  setStatus(
+    modelReady && authReady
+      ? (proxyReady ? '模型、鉴权和代理已加载' : '模型和鉴权已加载，代理列表不可用')
+      : '模型或外部鉴权加载失败'
+  );
   if (!modelReady) window.showToast?.('模型加载失败', 'error');
 })();
 </script>

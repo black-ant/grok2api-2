@@ -22,6 +22,7 @@ from app.platform.runtime.clock import now_s
 from app.platform.tokens import estimate_prompt_tokens, estimate_tokens
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
+from app.control.proxy.models import ProxyLease
 from app.control.account.runtime import get_refresh_service
 from app.control.model.cooldown import (
     ModelAdmission,
@@ -117,6 +118,7 @@ async def completions(
     reasoning_effort: str | None = None,
     temperature: float = 0.7,
     top_p: float = 0.95,
+    proxy_lease: ProxyLease | None = None,
     force_token: str | None = None,
     model_fallbacks: tuple[str, ...] = (),
     request_log_routing: dict[str, Any] | None = None,
@@ -225,8 +227,13 @@ async def completions(
                     )
 
                     try:
+                        stream_kwargs = {"timeout_s": timeout_s}
+                        if proxy_lease is not None:
+                            stream_kwargs["proxy_lease"] = proxy_lease
                         async for event_type, data in stream_console_chat(
-                            token, payload, timeout_s=timeout_s
+                            token,
+                            payload,
+                            **stream_kwargs,
                         ):
                             tokens = adapter.feed(event_type, data)
                             for tok in tokens:
@@ -422,8 +429,13 @@ async def completions(
             )
 
             try:
+                stream_kwargs = {"timeout_s": timeout_s}
+                if proxy_lease is not None:
+                    stream_kwargs["proxy_lease"] = proxy_lease
                 async for event_type, data in stream_console_chat(
-                    token, payload, timeout_s=timeout_s
+                    token,
+                    payload,
+                    **stream_kwargs,
                 ):
                     adapter.feed(event_type, data)
 

@@ -24,6 +24,9 @@ from app.platform.usage_audit import TRACKED_OPERATIONS, period_range
 from app.platform.storage import reconcile_local_media_cache_async
 from app.control.model import aliases as model_aliases
 from app.control.model import registry as model_registry
+from app.control.proxy import acquire_clash_proxy_lease
+from app.control.proxy.bridge import KernelBridgeError
+from app.control.proxy.clash import ClashParseError
 
 if TYPE_CHECKING:
     from app.control.account.refresh import AccountRefreshService
@@ -471,12 +474,34 @@ async def debug_chat(req: Request):
         payload = await req.json()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
     try:
         force_token = str(payload.pop("token", "") or "").strip() or None
+        proxy_id = str(payload.pop("proxy_id", "") or "").strip() or None
         chat_req = ChatCompletionRequest.model_validate(payload)
     except PydanticValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     _validate_chat(chat_req)
+
+    proxy_lease = None
+    proxy_kernel = None
+    if proxy_id:
+        try:
+            proxy_lease, proxy_kernel = await acquire_clash_proxy_lease(proxy_id)
+        except (ClashParseError, KernelBridgeError, RuntimeError) as exc:
+            raise ValidationError(
+                str(exc), param="proxy_id", code="invalid_proxy_id"
+            ) from exc
+
+    if proxy_lease is not None:
+        request_state = getattr(req, 'state', None)
+        if request_state is not None:
+            routing = getattr(request_state, 'request_log_routing', None)
+            if not isinstance(routing, dict):
+                routing = {}
+                request_state.request_log_routing = routing
+            routing['proxy'] = proxy_lease.request_log_proxy()
 
     started = time.perf_counter()
     messages = [m.model_dump(exclude_none=True) for m in chat_req.messages]
@@ -489,6 +514,7 @@ async def debug_chat(req: Request):
         tool_choice=chat_req.tool_choice,
         temperature=chat_req.temperature if chat_req.temperature is not None else 0.8,
         top_p=chat_req.top_p if chat_req.top_p is not None else 0.95,
+        proxy_lease=proxy_lease,
         force_token=force_token,
     )
     return Response(
@@ -505,6 +531,8 @@ async def debug_chat(req: Request):
                     "tools": chat_req.tools,
                     "tool_choice": chat_req.tool_choice,
                     "token": force_token,
+                    "proxy_id": proxy_id,
+                    "proxy_kernel": proxy_kernel,
                 },
                 "response": result,
             }

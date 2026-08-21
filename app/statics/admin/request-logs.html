@@ -332,12 +332,23 @@ function openDetail(item) {
   activeLogDetail = item;
   const overlay = document.getElementById('detail-overlay');
   const routing = item.routing || {};
+  const proxy = routing.proxy && typeof routing.proxy === 'object' ? routing.proxy : {};
+  const proxyEndpoint = [proxy.server, proxy.port].filter((value) => value !== undefined && value !== null && value !== '').join(':');
+  const proxyParts = [proxy.name, proxyEndpoint, proxy.kernel].filter(Boolean);
+  const proxyLabel = !Object.keys(proxy).length
+    ? '\u672a\u8bb0\u5f55'
+    : proxy.mode === 'direct'
+      ? '\u76f4\u8fde'
+      : proxyParts.join(' \u00b7 ') || '\u5df2\u4f7f\u7528\u4ee3\u7406\uff08\u8282\u70b9\u4fe1\u606f\u672a\u8bb0\u5f55\uff09';
+  const egressIp = proxy.egress_ip || (Object.keys(proxy).length ? '\u672a\u6d4b\u901f' : '\u672a\u8bb0\u5f55');
   document.getElementById('detail-title').textContent = `${item.method || ''} ${item.path || ''}`;
   const metaItems = [
     fmtTime(item.started_at),
     `${item.status_code || '—'}`,
     `${item.duration_ms || 0} ms`,
-    item.client || 'unknown',
+    `\u5ba2\u6237\u7aef ${item.client || 'unknown'}`,
+    `\u51fa\u53e3 IP（\u6700\u8fd1\u6d4b\u901f） ${egressIp}`,
+    `\u4f7f\u7528\u4ee3\u7406 ${proxyLabel}`,
   ];
   if (routing.model) metaItems.push(`模型 ${routing.model}`);
   if (routing.routed_key_tail) metaItems.push(`Key后5 ${routing.routed_key_tail}`);

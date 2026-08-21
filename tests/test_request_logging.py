@@ -16,6 +16,9 @@ class RequestLoggingTests(unittest.TestCase):
         self.assertIn("<th>账号</th>", html)
         self.assertIn("item.routing?.routed_key_tail", html)
         self.assertIn("item.routing?.pool", html)
+        self.assertIn('routing.proxy', html)
+        self.assertIn('egressIp', html)
+        self.assertIn('proxyLabel', html)
 
     def test_debug_chat_path_is_logged_by_default(self):
         prefixes = _env_prefixes()
