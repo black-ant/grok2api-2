@@ -1,10 +1,4 @@
-"""Clash YAML parsing for the native HTTP/SOCKS egress stack.
-
-The application can connect directly through HTTP(S) and SOCKS proxies. It
-does not embed a Mihomo or Xray runtime, so other Clash node protocols are
-returned as visible-but-unavailable candidates instead of being converted to
-an invalid URL.
-"""
+"""Clash YAML parsing and proxy-kernel capability detection."""
 
 from __future__ import annotations
 
@@ -28,6 +22,25 @@ _SUPPORTED_TYPES = {
     "socks4a": "socks4",
 }
 
+_KERNEL_TYPES = {
+    "anytls",
+    "hysteria",
+    "hysteria2",
+    "mieru",
+    "shadowtls",
+    "snell",
+    "ss",
+    "ssr",
+    "shadowsocks",
+    "socks5",
+    "socks",
+    "trojan",
+    "tuic",
+    "vless",
+    "vmess",
+    "wireguard",
+}
+
 
 class ClashParseError(ValueError):
     """Raised when a Clash YAML payload cannot produce proxy candidates."""
@@ -45,6 +58,8 @@ class ClashProxyCandidate:
     supported: bool
     reason: str = ""
     proxy_url: str = ""
+    kernels: tuple[str, ...] = ()
+    raw_node: dict[str, Any] | None = None
 
     def public_dict(self) -> dict[str, Any]:
         """Return the safe representation used by admin APIs."""
@@ -56,6 +71,8 @@ class ClashProxyCandidate:
             "port": self.port,
             "supported": self.supported,
             "reason": self.reason,
+            "kernels": list(self.kernels),
+            "kernel": self.kernels[0] if self.kernels else "",
         }
 
 
@@ -179,7 +196,24 @@ def parse_clash_yaml(raw: str) -> list[ClashProxyCandidate]:
 
         if proxy_type not in _SUPPORTED_TYPES:
             display_type = proxy_type or "未知"
-            reason = f"当前请求栈不支持 {display_type}，需要 Mihomo/Xray 内核"
+            kernels = _kernels_for_node(node, proxy_type)
+            if kernels and server and port:
+                candidates.append(
+                    ClashProxyCandidate(
+                        proxy_id=proxy_id,
+                        name=name,
+                        proxy_type=proxy_type,
+                        server=server,
+                        port=port,
+                        supported=True,
+                        kernels=kernels,
+                        raw_node=dict(node),
+                    )
+                )
+                continue
+            reason = (
+                f"当前请求栈不支持 {display_type}，需要 Xray、sing-box 或 Mihomo 内核"
+            )
             candidates.append(
                 ClashProxyCandidate(
                     proxy_id=proxy_id,
@@ -189,6 +223,8 @@ def parse_clash_yaml(raw: str) -> list[ClashProxyCandidate]:
                     port=port,
                     supported=False,
                     reason=reason,
+                    kernels=kernels,
+                    raw_node=dict(node),
                 )
             )
             continue
@@ -203,6 +239,8 @@ def parse_clash_yaml(raw: str) -> list[ClashProxyCandidate]:
                     port=port,
                     supported=False,
                     reason="缺少有效的 server 或 port",
+                    kernels=_kernels_for_node(node, proxy_type),
+                    raw_node=dict(node),
                 )
             )
             continue
@@ -216,12 +254,36 @@ def parse_clash_yaml(raw: str) -> list[ClashProxyCandidate]:
                 port=port,
                 supported=True,
                 proxy_url=_build_native_url(node, proxy_type, server, port),
+                kernels=("native",),
+                raw_node=dict(node),
             )
         )
 
     if not candidates:
         raise ClashParseError("YAML 中没有代理节点")
     return candidates
+
+
+def _kernels_for_type(proxy_type: str) -> tuple[str, ...]:
+    normalized = _as_text(proxy_type).lower()
+    if normalized in {"http", "https", "socks", "socks4", "socks4a", "socks5", "socks5h"}:
+        return ("native",)
+    if normalized in {"vless", "vmess", "trojan", "ss", "shadowsocks"}:
+        return ("xray", "mihomo", "sing-box")
+    if normalized in {"hysteria", "hysteria2", "tuic", "anytls"}:
+        return ("sing-box", "mihomo")
+    if normalized in _KERNEL_TYPES:
+        return ("mihomo",)
+    return ()
+
+
+def _kernels_for_node(node: dict[str, Any], proxy_type: str) -> tuple[str, ...]:
+    normalized = _as_text(proxy_type).lower()
+    if normalized in {"ss", "shadowsocks"} and _as_text(node.get("plugin")):
+        return ("mihomo",)
+    if normalized == "ssr":
+        return ("mihomo",)
+    return _kernels_for_type(normalized)
 
 
 def find_clash_candidate(raw: str, proxy_id: str) -> ClashProxyCandidate:

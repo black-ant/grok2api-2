@@ -27,6 +27,8 @@ from .models import (
 )
 from .providers.manual import ManualClearanceProvider
 from .providers.flaresolverr import FlareSolverrClearanceProvider
+from .bridge import KernelBridgeError, get_proxy_bridge_manager
+from .clash import ClashParseError, find_clash_candidate
 
 _DEFAULT_CLEARANCE_ORIGIN = "https://grok.com"
 BundleKey = tuple[str, str]
@@ -83,19 +85,35 @@ class ProxyDirectory:
             }
         clash_yaml = cfg.get_str('proxy.clash.yaml', '')
         clash_proxy_id = cfg.get_str('proxy.clash.selected_proxy_id', '')
+        clash_kernel = cfg.get_str('proxy.clash.selected_kernel', 'auto')
         clash_url = cfg.get_str('proxy.clash.selected_url', '')
-        if clash_enabled and clash_url:
-            egress_mode = EgressMode.SINGLE_PROXY
-            base_url = clash_url
-            res_url = clash_url
-            base_pool = ()
-            res_pool = ()
+        if clash_enabled:
+            if clash_yaml and clash_proxy_id:
+                try:
+                    candidate = find_clash_candidate(clash_yaml, clash_proxy_id)
+                    bridge_manager = get_proxy_bridge_manager()
+                    clash_url, clash_kernel = await bridge_manager.ensure_candidate(
+                        candidate,
+                        clash_kernel,
+                        auto_download=cfg.get_bool(
+                            'proxy.kernels.auto_download', False
+                        ),
+                    )
+                except (ClashParseError, KernelBridgeError, RuntimeError) as exc:
+                    raise RuntimeError(f'Clash 全局代理启动失败：{exc}') from exc
+            if clash_url:
+                egress_mode = EgressMode.SINGLE_PROXY
+                base_url = clash_url
+                res_url = clash_url
+                base_pool = ()
+                res_pool = ()
 
         clearance = resolve_clearance_config(cfg)
         config_sig = (
             clash_enabled,
             clash_yaml,
             clash_proxy_id,
+            clash_kernel,
             clash_url,
             egress_mode.value,
             clearance_mode.value,

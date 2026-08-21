@@ -101,8 +101,34 @@ yaml = ''
 # 当前选中的节点标识与名称
 selected_proxy_id = ''
 selected_proxy_name = ''
+# 当前节点使用的代理内核：native | xray | sing-box | mihomo
+selected_kernel = 'auto'
 # 后端校验后的原生代理 URL
 selected_url = ''
+
+[proxy.kernels]
+# 内核安装目录；相对路径基于项目根目录
+directory = 'data/proxy-kernels'
+# 桥接运行目录；节点配置含敏感凭据，仅写入本机
+work_directory = 'data/proxy-bridges'
+# 启用时是否自动下载缺失内核；默认关闭，避免无提示下载大文件
+auto_download = false
+# 下载内核时使用的 HTTP/SOCKS 代理，可留空
+download_proxy_url = ''
+download_timeout_sec = 180
+bridge_start_timeout_sec = 20
+
+[proxy.kernels.xray]
+path = ''
+version = 'latest'
+
+[proxy.kernels.sing-box]
+path = ''
+version = 'latest'
+
+[proxy.kernels.mihomo]
+path = ''
+version = 'latest'
 
 [proxy.clearance]
 # Cloudflare clearance 模式：none | manual | flaresolverr | on_demand
