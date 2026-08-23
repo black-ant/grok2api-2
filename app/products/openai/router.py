@@ -119,7 +119,11 @@ async def _resolve_model_for_request(
     )
     if resolved is None:
         return None
-    if pools is not None and not _model_available_for_pools(resolved.spec, pools):
+    if (
+        pools is not None
+        and not resolved.is_virtual
+        and not _model_available_for_pools(resolved.spec, pools)
+    ):
         return None
     if require_api and not resolved.spec.supported_in_api:
         return None
