@@ -6,7 +6,7 @@ import orjson
 
 from app.control.model import registry as model_registry
 from app.platform.errors import UpstreamError
-from app.products.web.admin.capability import CapabilityScanRequest, _model_payload, scan_capabilities
+from app.products.web.admin.capability import CapabilityScanRequest, scan_capabilities
 
 
 class _Repo:
@@ -15,16 +15,6 @@ class _Repo:
 
 
 class AdminCapabilityRoutingTests(unittest.IsolatedAsyncioTestCase):
-    def test_model_payload_exposes_alias_eligibility(self):
-        composer = model_registry.get("grok-composer-2.5-fast")
-        chat = model_registry.get("grok-4.20-0309-non-reasoning")
-        console = model_registry.get("grok-4.20-0309-non-reasoning-console")
-
-        self.assertFalse(_model_payload(composer)["alias_eligible"]["FREE"])
-        self.assertFalse(_model_payload(chat)["alias_eligible"]["FREE"])
-        self.assertTrue(_model_payload(console)["alias_eligible"]["FREE"])
-        self.assertFalse(_model_payload(composer)["supported_in_api"])
-
     async def test_routing_scan_uses_reserved_account_and_feedback(self):
         spec = model_registry.get("grok-4.20-0309-console")
         self.assertIsNotNone(spec)

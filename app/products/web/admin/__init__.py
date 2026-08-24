@@ -4,6 +4,7 @@ All admin endpoints live under ``/admin/api`` with ``verify_admin_key`` guard.
 Heavy handlers are split into ``tokens`` and ``batch`` sub-modules.
 """
 
+import asyncio
 import re
 import time
 from typing import TYPE_CHECKING, Any
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import RootModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel, Field, RootModel, ValidationError as PydanticValidationError
 
 from app.control.account.backends.factory import get_repository_backend
 from app.control.account.commands import ListAccountsQuery
@@ -70,6 +71,31 @@ _STARTUP_ONLY_CONFIG_PREFIXES = (
 
 class ConfigPatchRequest(RootModel[dict[str, Any]]):
     """Loose config patch payload with explicit root typing."""
+
+
+class ModelMappingAppendRequest(BaseModel):
+    alias: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+
+
+_MODEL_MAPPING_MUTATION_LOCK = asyncio.Lock()
+
+
+def _append_model_to_alias(
+    aliases: dict[str, dict[str, Any]],
+    alias_name: str,
+    model_name: str,
+) -> bool:
+    pool = aliases.get(alias_name)
+    if not isinstance(pool, dict):
+        return False
+    stable = list(pool.get("stable") or [])
+    degraded = list(pool.get("degraded") or [])
+    if model_name in stable or model_name in degraded:
+        return False
+    pool["stable"] = [*stable, model_name]
+    aliases[alias_name] = pool
+    return True
 
 
 def _sanitize_text(value: Any, *, remove_all_spaces: bool = False) -> str:
@@ -429,14 +455,44 @@ async def update_model_mapping(req: ConfigPatchRequest):
     if not isinstance(aliases, dict):
         raise ValidationError("models.aliases must be an object", param="models.aliases")
 
-    normalized = model_aliases.normalize_alias_config(aliases)
-    for alias_name, alias_cfg in model_aliases.alias_config_map().items():
-        normalized.setdefault(alias_name, alias_cfg)
+    async with _MODEL_MAPPING_MUTATION_LOCK:
+        normalized = model_aliases.normalize_alias_config(aliases)
+        for alias_name, alias_cfg in model_aliases.alias_config_map().items():
+            normalized.setdefault(alias_name, alias_cfg)
 
-    await config.update({"models": {"aliases": normalized}})
-    await config.load()
-    model_aliases.reset_runtime_state()
+        await config.update({"models": {"aliases": normalized}})
+        await config.load()
+        model_aliases.reset_runtime_state()
     return {"status": "success", "message": "模型映射已更新"}
+
+
+@router.post("/model-mapping/append", tags=[_TAG_ADMIN_SYSTEM])
+async def append_model_mapping(req: ModelMappingAppendRequest):
+    alias_name = req.alias.strip()
+    model_name = req.model.strip()
+    async with _MODEL_MAPPING_MUTATION_LOCK:
+        await config.load()
+        aliases = model_aliases.alias_config_map()
+        if alias_name not in aliases:
+            raise ValidationError("Unknown model alias", param="alias")
+
+        added = _append_model_to_alias(aliases, alias_name, model_name)
+        normalized = model_aliases.normalize_alias_config(aliases)
+        await config.update({"models": {"aliases": normalized}})
+        await config.load()
+        model_aliases.reset_runtime_state()
+        saved_aliases = model_aliases.alias_config_map()
+
+    saved_pool = saved_aliases.get(alias_name, {})
+    saved_models = [
+        *(saved_pool.get("stable") or []),
+        *(saved_pool.get("degraded") or []),
+    ]
+    return {
+        "status": "success",
+        "added": added and model_name in saved_models,
+        "data": {"aliases": saved_aliases},
+    }
 
 
 @router.get("/debug/chat/tokens", tags=[_TAG_ADMIN_SYSTEM])

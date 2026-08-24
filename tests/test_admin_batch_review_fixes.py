@@ -1,7 +1,10 @@
 import asyncio
+from copy import deepcopy
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import orjson
 
@@ -11,7 +14,12 @@ from app.control.account.refresh import RefreshResult
 from app.control.account.backends.redis import RedisAccountRepository
 from app.platform.errors import ValidationError
 from app.products.web.admin.batch import BatchRequest, batch_refresh
-from app.products.web.admin import tokens as admin_tokens
+from app.products.web.admin import (
+    ModelMappingAppendRequest,
+    _append_model_to_alias,
+    append_model_mapping,
+    tokens as admin_tokens,
+)
 
 
 class _Repo:
@@ -111,6 +119,76 @@ class AdminBatchReviewFixTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No manageable tokens available", str(cm.exception))
         self.assertEqual(refresh_svc.refreshed_tokens, [])
 
+    def test_model_mapping_append_keeps_existing_candidates(self):
+        aliases = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.20-0309-console"],
+                "stable_ratio": 95,
+                "degraded_ratio": 5,
+            }
+        }
+
+        self.assertTrue(_append_model_to_alias(aliases, "FREE", "grok-4.3-low"))
+        self.assertTrue(
+            _append_model_to_alias(aliases, "FREE", "grok-4.3-medium")
+        )
+        self.assertEqual(
+            aliases["FREE"]["stable"],
+            ["grok-4.3-console", "grok-4.3-low", "grok-4.3-medium"],
+        )
+
+    async def test_model_mapping_append_keeps_candidates_across_requests(self):
+        state = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": [],
+                "stable_ratio": 95,
+                "degraded_ratio": 5,
+            },
+            "SUPER": {
+                "stable": ["grok-4.20-auto"],
+                "degraded": [],
+                "stable_ratio": 95,
+                "degraded_ratio": 5,
+            },
+        }
+
+        async def apply_update(patch):
+            state.clear()
+            state.update(deepcopy(patch["models"]["aliases"]))
+
+        fake_config = SimpleNamespace(
+            load=AsyncMock(),
+            update=AsyncMock(side_effect=apply_update),
+        )
+
+        with (
+            patch("app.products.web.admin.config", fake_config),
+            patch(
+                "app.products.web.admin.model_aliases.alias_config_map",
+                side_effect=lambda: deepcopy(state),
+            ),
+            patch(
+                "app.products.web.admin.model_aliases.normalize_alias_config",
+                side_effect=lambda value: deepcopy(value),
+            ),
+            patch("app.products.web.admin.model_aliases.reset_runtime_state"),
+        ):
+            first = await append_model_mapping(
+                ModelMappingAppendRequest(alias="FREE", model="first-model")
+            )
+            second = await append_model_mapping(
+                ModelMappingAppendRequest(alias="FREE", model="second-model")
+            )
+
+        self.assertTrue(first["added"])
+        self.assertTrue(second["added"])
+        self.assertEqual(
+            second["data"]["aliases"]["FREE"]["stable"],
+            ["grok-4.3-console", "first-model", "second-model"],
+        )
+
 
 class RedisRepositoryReviewFixTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_accounts_reads_many_tokens_with_one_pipeline(self):
@@ -179,10 +257,8 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
             "  const operation = aliasMutationQueue.then(async () => {",
             html,
         )
-        self.assertIn("function aliasEligibility(aliasName, model)", html)
-        self.assertIn("FREE 仅支持 console 模型", html)
-        self.assertIn("|| freeBlocked ? 'disabled' : ''", html)
-        self.assertIn("const savedPayload = await apiFetch('/model-mapping');", html)
+        self.assertIn("apiFetch('/model-mapping/append'", html)
+        self.assertIn("body: JSON.stringify({ alias: aliasName, model: modelId })", html)
         self.assertIn("if (!aliasHasModel(aliasName, modelId))", html)
         self.assertIn("const operation = aliasMutationQueue.then(async () =>", html)
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)

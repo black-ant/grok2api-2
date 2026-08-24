@@ -76,17 +76,6 @@ class ModelAliasesTests(unittest.TestCase):
             self.assertFalse(aliases.alias_supported_in_api("CUSTOM"))
             self.assertIsNone(aliases.alias_supported_in_api("grok-4.3-console"))
 
-    def test_candidate_supported_in_alias_exposes_candidate_contract(self):
-        self.assertFalse(
-            aliases.candidate_supported_in_alias("FREE", "grok-composer-2.5-fast")
-        )
-        self.assertFalse(
-            aliases.candidate_supported_in_alias("FREE", "grok-4.20-0309-non-reasoning")
-        )
-        self.assertTrue(
-            aliases.candidate_supported_in_alias("FREE", "grok-4.20-0309-non-reasoning-console")
-        )
-
     def test_resolution_contract_rejects_incompatible_virtual_candidate(self):
         with patch.object(
             aliases,

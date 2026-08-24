@@ -17,7 +17,6 @@ from app.control.account.commands import ListAccountsQuery
 from app.control.account.enums import FeedbackKind
 from app.control.account.invalid_credentials import feedback_kind_for_error
 from app.control.account.runtime import get_refresh_service
-from app.control.model import aliases as model_aliases
 from app.control.model import registry as model_registry
 from app.control.model.enums import ModeId
 from app.dataplane.account import get_account_directory
@@ -154,12 +153,6 @@ def _model_payload(spec: "ModelSpec") -> dict[str, Any]:
         "kind": _model_kind(spec),
         "pool": spec.pool_name(),
         "mode_id": int(spec.mode_id),
-        "supported_in_api": spec.supported_in_api,
-        "availability_note": spec.availability_note,
-        "alias_eligible": {
-            alias_name: model_aliases.candidate_supported_in_alias(alias_name, spec.model_name)
-            for alias_name in model_aliases.DEFAULT_ALIAS_CONFIG
-        },
     }
 
 

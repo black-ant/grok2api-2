@@ -593,27 +593,6 @@ function aliasAddPending(aliasName, modelId) {
   return pendingAliasAdds.has(aliasAddKey(aliasName, modelId));
 }
 
-function aliasEligibility(aliasName, model) {
-  const eligibility = model?.alias_eligible;
-  if (eligibility && Object.prototype.hasOwnProperty.call(eligibility, aliasName)) {
-    return {
-      allowed: Boolean(eligibility[aliasName]),
-      reason: model.supported_in_api === false
-        ? '模型未接入当前 API'
-        : aliasName === 'FREE' && model.kind !== 'console'
-          ? 'FREE 仅支持 console 模型'
-          : '模型不符合该别名要求',
-    };
-  }
-  if (model?.supported_in_api === false) {
-    return { allowed: false, reason: '模型未接入当前 API' };
-  }
-  if (aliasName === 'FREE' && model?.kind !== 'console') {
-    return { allowed: false, reason: 'FREE 仅支持 console 模型' };
-  }
-  return { allowed: true, reason: '' };
-}
-
 function renderBatchResults() {
   const container = document.getElementById('batch-results');
   if (!container) return;
@@ -624,7 +603,6 @@ function renderBatchResults() {
   }
   const rows = batchResults.map((item) => {
     const model = models.find((modelItem) => modelItem.id === item.id) || {};
-    const modelInfo = { ...model, ...item };
     const status = item.status || 'unknown';
     const canAdd = status === 'available';
     const modelName = item.name || model.name || item.id;
@@ -637,10 +615,6 @@ function renderBatchResults() {
     const superAdded = aliasHasModel('SUPER', item.id);
     const freePending = aliasAddPending('FREE', item.id);
     const superPending = aliasAddPending('SUPER', item.id);
-    const freeEligibility = aliasEligibility('FREE', modelInfo);
-    const superEligibility = aliasEligibility('SUPER', modelInfo);
-    const freeBlocked = !freeEligibility.allowed && !freeAdded && !freePending;
-    const superBlocked = !superEligibility.allowed && !superAdded && !superPending;
     return `
       <tr class="${status === 'available' ? 'is-pass' : 'is-fail'}">
         <td>
@@ -651,8 +625,8 @@ function renderBatchResults() {
         <td>${esc(batchResultText(item))}</td>
         <td>
           <div class="result-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="FREE" data-model-id="${esc(item.id)}" ${!canAdd || freeAdded || freePending || freeBlocked ? 'disabled' : ''}>${freePending ? '加入中…' : freeAdded ? '已在 free' : freeBlocked ? freeEligibility.reason : '加入 free'}</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="SUPER" data-model-id="${esc(item.id)}" ${!canAdd || superAdded || superPending || superBlocked ? 'disabled' : ''}>${superPending ? '加入中…' : superAdded ? '已在 super' : superBlocked ? superEligibility.reason : '加入 super'}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="FREE" data-model-id="${esc(item.id)}" ${!canAdd || freeAdded || freePending ? 'disabled' : ''}>${freePending ? '加入中…' : freeAdded ? '已在 free' : '加入 free'}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="SUPER" data-model-id="${esc(item.id)}" ${!canAdd || superAdded || superPending ? 'disabled' : ''}>${superPending ? '加入中…' : superAdded ? '已在 super' : '加入 super'}</button>
           </div>
         </td>
       </tr>`;
@@ -689,34 +663,19 @@ async function refreshAliasCache() {
 async function addModelToAlias(modelId, aliasName) {
   const key = aliasAddKey(aliasName, modelId);
   if (pendingAliasAdds.has(key)) return 'pending';
-  const model = models.find((item) => item.id === modelId) || {};
-  const eligibility = aliasEligibility(aliasName, model);
-  if (!eligibility.allowed) throw new Error(eligibility.reason);
   pendingAliasAdds.add(key);
   const operation = aliasMutationQueue.then(async () => {
-    const payload = await apiFetch('/model-mapping');
-    const aliases = normalizeAliases(payload?.data?.aliases);
-    const pool = aliases[aliasName] || { stable: [], degraded: [] };
-    if ([...(pool.stable || []), ...(pool.degraded || [])].includes(modelId)) {
-      aliasCache = aliases;
-      aliasCacheLoaded = true;
-      return 'exists';
-    }
-    pool.stable = pool.stable || [];
-    pool.stable.push(modelId);
-    aliases[aliasName] = pool;
-    await apiFetch('/model-mapping', {
+    const payload = await apiFetch('/model-mapping/append', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ models: { aliases } }),
+      body: JSON.stringify({ alias: aliasName, model: modelId }),
     });
-    const savedPayload = await apiFetch('/model-mapping');
-    aliasCache = normalizeAliases(savedPayload?.data?.aliases);
+    aliasCache = normalizeAliases(payload?.data?.aliases);
     aliasCacheLoaded = true;
     if (!aliasHasModel(aliasName, modelId)) {
       throw new Error(`模型未被保存到 ${aliasName}`);
     }
-    return 'added';
+    return payload?.added ? 'added' : 'exists';
   });
   aliasMutationQueue = operation.catch(() => {});
   try {
