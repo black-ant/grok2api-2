@@ -88,6 +88,7 @@
     .result-model { max-width:300px; font-weight:750; color:#111; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .result-meta { margin-top:3px; color:#666; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .result-actions { display:flex; justify-content:flex-end; gap:6px; white-space:nowrap }
+    .result-action-feedback { margin-top:5px; color:#b42318; font-size:11px; text-align:right; overflow-wrap:anywhere }
     .modal-footer { flex-shrink:0 }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
@@ -250,6 +251,7 @@ let aliasCache = { FREE: { stable: [], degraded: [] }, SUPER: { stable: [], degr
 let aliasCacheLoaded = false;
 let aliasMutationQueue = Promise.resolve();
 const pendingAliasAdds = new Set();
+const aliasMutationErrors = new Map();
 
 function esc(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -643,6 +645,17 @@ function renderBatchResults() {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+  container.querySelectorAll('[data-add-alias]').forEach((button) => {
+    const aliasName = button.dataset.addAlias || '';
+    const modelId = button.dataset.modelId || '';
+    const error = aliasMutationErrors.get(aliasAddKey(aliasName, modelId));
+    if (!error) return;
+    button.textContent = '重试 ' + aliasName.toLowerCase();
+    const feedback = document.createElement('div');
+    feedback.className = 'result-action-feedback';
+    feedback.textContent = aliasName.toLowerCase() + '：' + error;
+    button.closest('td')?.appendChild(feedback);
+  });
   container.hidden = false;
   container.querySelectorAll('[data-add-alias]').forEach((button) => {
     button.addEventListener('click', () => addBatchResultToAlias(button));
@@ -664,6 +677,8 @@ async function addModelToAlias(modelId, aliasName) {
   const key = aliasAddKey(aliasName, modelId);
   if (pendingAliasAdds.has(key)) return 'pending';
   pendingAliasAdds.add(key);
+  aliasMutationErrors.delete(key);
+  renderBatchResults();
   const operation = aliasMutationQueue.then(async () => {
     const payload = await apiFetch('/model-mapping/append', {
       method: 'POST',
@@ -691,12 +706,15 @@ async function addBatchResultToAlias(button) {
   const aliasName = button.dataset.addAlias || '';
   if (!modelId || !VIRTUAL_MODEL_ALIASES.includes(aliasName)) return;
   button.disabled = true;
+  const key = aliasAddKey(aliasName, modelId);
   try {
     const result = await addModelToAlias(modelId, aliasName);
     if (result !== 'pending') {
       window.showToast?.(result === 'exists' ? `已在 ${aliasName}` : `已加入 ${aliasName}`, 'success');
     }
   } catch (error) {
+    const message = error?.status ? 'HTTP ' + error.status + ' · ' + error.message : (error?.message || '未知错误');
+    aliasMutationErrors.set(key, message);
     window.showToast?.(`加入失败：${error.message}`, 'error');
   } finally {
     renderBatchResults();

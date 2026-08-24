@@ -240,6 +240,13 @@ class ConfigHtmlReviewFixTests(unittest.TestCase):
 
 
 class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
+    def test_batch_alias_add_reports_pending_and_failure(self):
+        html = Path('app/statics/admin/grok-capability.html').read_text(encoding='utf-8')
+
+        self.assertIn('aliasMutationErrors.delete(key);', html)
+        self.assertIn('aliasMutationErrors.set(key, message);', html)
+        self.assertIn('result-action-feedback', html)
+
     def test_batch_model_list_keeps_visible_height(self):
         html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
 
