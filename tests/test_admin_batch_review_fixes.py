@@ -178,6 +178,15 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
         self.assertIn("加入中…", html)
 
+    def test_batch_modal_defaults_to_all_models(self):
+        html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "function openBatchModal() {\n"
+            "  batchSelection = new Set(models.map((item) => item.id));",
+            html,
+        )
+
     def test_capability_scan_can_use_actual_routing_pool(self):
         html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
 

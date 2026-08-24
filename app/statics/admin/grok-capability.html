@@ -708,6 +708,7 @@ async function addBatchResultToAlias(button) {
 }
 
 function openBatchModal() {
+  batchSelection = new Set(models.map((item) => item.id));
   batchResults = [];
   renderBatchModels();
   refreshAliasCache().then(renderBatchResults).catch(() => {
