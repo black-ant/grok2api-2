@@ -179,6 +179,11 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
             "  const operation = aliasMutationQueue.then(async () => {",
             html,
         )
+        self.assertIn("function aliasEligibility(aliasName, model)", html)
+        self.assertIn("FREE 仅支持 console 模型", html)
+        self.assertIn("|| freeBlocked ? 'disabled' : ''", html)
+        self.assertIn("const savedPayload = await apiFetch('/model-mapping');", html)
+        self.assertIn("if (!aliasHasModel(aliasName, modelId))", html)
         self.assertIn("const operation = aliasMutationQueue.then(async () =>", html)
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
         self.assertIn("加入中…", html)

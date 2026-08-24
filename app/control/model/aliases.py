@@ -159,6 +159,12 @@ def _candidate_is_usable(alias_name: str, candidate: str) -> bool:
     return required_capability is None or bool(spec.capability & required_capability)
 
 
+def candidate_supported_in_alias(alias_name: str, candidate: str) -> bool:
+    """Return whether a model can be configured as a candidate for an alias."""
+
+    return _candidate_is_usable(alias_name, candidate)
+
+
 def _sanitize_pool(alias_name: str, config: ModelPoolConfig) -> ModelPoolConfig:
     stable = _unique(
         candidate
@@ -749,6 +755,7 @@ __all__ = [
     "alias_config_map",
     "alias_configs",
     "alias_map",
+    "candidate_supported_in_alias",
     "demote_model",
     "fallback_candidate_pools",
     "fallback_candidates",
