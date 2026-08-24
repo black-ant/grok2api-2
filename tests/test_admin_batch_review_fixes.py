@@ -178,6 +178,17 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
         self.assertIn("加入中…", html)
 
+    def test_capability_scan_can_use_actual_routing_pool(self):
+        html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
+
+        self.assertIn('value="routing" selected', html)
+        self.assertIn("selection_mode: selectionMode", html)
+        self.assertIn("实际发送池 · 按模型自动选择 Key", html)
+        self.assertIn("实际发送池 · ${item.account_pool", html)
+        report = Path("app/statics/admin/grok-capability-report.html").read_text(encoding="utf-8")
+        self.assertIn("report.selection_mode === 'routing'", report)
+        self.assertIn("实际发送池 · ${item.account_pool", report)
+
 
 class AdminTokenTaskReviewFixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:

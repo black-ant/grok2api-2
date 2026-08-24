@@ -173,16 +173,17 @@ function renderReport() {
   document.getElementById('empty-card').hidden = true;
   document.getElementById('report-view').hidden = false;
   const reportAccounts = Array.isArray(report.accounts) ? report.accounts : [];
-  document.getElementById('summary-token').textContent = reportAccounts.length > 1
-    ? `${reportAccounts.length} 个 Key 轮换`
-    : (report.token?.label || '—');
+  const selectionSummary = report.selection_mode === 'routing'
+    ? `实际发送池 · ${report.selection_strategy === 'quota' ? '配额/健康选择' : '随机可用选择'}`
+    : (reportAccounts.length > 1 ? `${reportAccounts.length} 个 Key 轮换` : (report.token?.label || '—'));
+  document.getElementById('summary-token').textContent = selectionSummary;
   document.getElementById('summary-question').textContent = summaryQuestionText();
   document.getElementById('summary-status').textContent = summaryStatusText();
   document.getElementById('summary-duration').textContent = `${report.duration_ms || 0} ms`;
   document.getElementById('report-meta').textContent = `${fmtTime(report.started_at)} · ${report.duration_ms || 0} ms`;
   document.getElementById('result-body').innerHTML = report.results.map((item) => `
     <tr>
-      <td><div>${esc(item.name || item.id)}${item.token_tail ? ` · ${esc(item.token_tail)}` : ''}</div><div class="mono muted">${esc(item.id)}</div></td>
+      <td><div>${esc(item.name || item.id)}${item.token_tail ? ` · ${esc(item.token_tail)}` : ''}</div><div class="mono muted">${esc(item.id)} · ${esc(item.selection_mode === 'routing' ? `实际发送池 · ${item.account_pool || '无可用 Key'}` : '指定 Key')}</div></td>
       <td>${esc(item.kind || 'chat')}</td>
       <td><span class="status-pill status-${esc(item.status || 'unknown')}">${esc(statusLabel(item.status))}</span></td>
       <td class="mono">${esc(item.http_status ?? '—')}</td>
