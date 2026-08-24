@@ -715,7 +715,7 @@ async function addBatchResultToAlias(button) {
   } catch (error) {
     const message = error?.status ? 'HTTP ' + error.status + ' · ' + error.message : (error?.message || '未知错误');
     aliasMutationErrors.set(key, message);
-    window.showToast?.(`加入失败：${error.message}`, 'error');
+    window.showToast?.(`加入失败：${message}`, 'error');
   } finally {
     renderBatchResults();
   }
