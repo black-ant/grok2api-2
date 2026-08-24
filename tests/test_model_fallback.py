@@ -12,6 +12,7 @@ from app.control.model.cooldown import (
     clear_rate_limit,
     mark_model_success,
     mark_rate_limited,
+    model_status_snapshot,
     release_probe,
     reset_rate_limits,
 )
@@ -106,9 +107,19 @@ class ModelFallbackTests(unittest.TestCase):
                 20,
             )
 
-            clock[0] = 129.0
-            self.assertEqual(admit_model("model-1"), ModelAdmission.BLOCKED)
             clock[0] = 130.0
+            self.assertEqual(
+                mark_rate_limited("model-1", 10, max_cooldown_sec=40),
+                40,
+            )
+            status = model_status_snapshot()["model-1"]
+            self.assertEqual(status["consecutive_rate_limits"], 3)
+            self.assertEqual(status["last_delay_sec"], 40)
+            self.assertEqual(status["status"], "cooling")
+
+            clock[0] = 169.0
+            self.assertEqual(admit_model("model-1"), ModelAdmission.BLOCKED)
+            clock[0] = 170.0
             self.assertEqual(admit_model("model-1"), ModelAdmission.PROBE)
             mark_model_success("model-1")
             self.assertEqual(admit_model("model-1"), ModelAdmission.NORMAL)
@@ -158,6 +169,28 @@ class ModelFallbackTests(unittest.TestCase):
             self.assertIn("model-1", blocked_models())
             clock[0] = 220.0
             self.assertEqual(admit_model("model-1"), ModelAdmission.PROBE)
+
+    def test_progressive_backoff_does_not_shorten_after_large_retry_after(self):
+        clock = [100.0]
+        with patch.object(cooldown, "monotonic", side_effect=lambda: clock[0]):
+            self.assertEqual(
+                mark_rate_limited(
+                    "model-1",
+                    10,
+                    max_cooldown_sec=40,
+                    retry_after_sec=120,
+                ),
+                120,
+            )
+            self.assertEqual(
+                mark_rate_limited(
+                    "model-1",
+                    10,
+                    max_cooldown_sec=40,
+                    retry_after_sec=5,
+                ),
+                120,
+            )
 
     def test_jitter_is_randomized_but_stays_within_local_maximum(self):
         with patch.object(cooldown.random, "uniform", return_value=5.0) as uniform:

@@ -11,6 +11,9 @@ class ModelMappingPageTests(unittest.TestCase):
         self.assertIn("稳定池", html)
         self.assertIn("降级池", html)
         self.assertIn("apiFetch('/model-mapping'", html)
+        self.assertIn("<span>降级</span>", html)
+        self.assertIn("degradationStatus(item)", html)
+        self.assertIn("loadModelsModal(false)", html)
         self.assertIn("body:JSON.stringify({ models:{ aliases } })", html)
         self.assertIn("id=\"restore-btn\"", html)
         self.assertIn("const DEFAULT_ALIASES =", html)
@@ -38,6 +41,7 @@ class ModelMappingPageTests(unittest.TestCase):
         self.assertNotIn("<table", html.lower())
         self.assertIn('@router.get("/admin/model-routing"', router)
         self.assertIn('@router.get("/model-routing"', admin_api)
+        self.assertIn("model_status_snapshot()", admin_api)
     def test_admin_header_links_model_mapping_page(self):
         header = Path("app/statics/admin/header.html").read_text(encoding="utf-8")
         script = Path("app/statics/js/admin-header.js").read_text(encoding="utf-8")

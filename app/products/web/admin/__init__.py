@@ -23,6 +23,7 @@ from app.platform.request_logging import request_log_store
 from app.platform.usage_audit import TRACKED_OPERATIONS, period_range
 from app.platform.storage import reconcile_local_media_cache_async
 from app.control.model import aliases as model_aliases
+from app.control.model.cooldown import model_status_snapshot
 from app.control.model import registry as model_registry
 from app.control.proxy import acquire_clash_proxy_lease
 from app.control.proxy.bridge import KernelBridgeError
@@ -382,6 +383,7 @@ async def list_debug_chat_models():
 @router.get("/model-mapping", tags=[_TAG_ADMIN_SYSTEM])
 async def get_model_mapping():
     aliases = model_aliases.alias_config_map()
+    degradation = model_status_snapshot()
     models = [
         {
             "id": spec.model_name,
@@ -393,6 +395,7 @@ async def get_model_mapping():
             "image_edit": spec.is_image_edit(),
             "video": spec.is_video(),
             "chat": spec.is_chat(),
+            "degradation": degradation.get(spec.model_name, {"status": "normal"}),
         }
         for spec in model_registry.list_enabled()
     ]

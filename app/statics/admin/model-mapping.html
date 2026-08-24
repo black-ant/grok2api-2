@@ -39,11 +39,11 @@
     .btn-primary { height:36px; padding:0 15px; border-radius:11px; background:#111; color:#fff !important; -webkit-text-fill-color:#fff; border:1px solid #111; font-weight:750; box-shadow:0 8px 18px rgba(17,17,17,.08) }
     .btn-primary:hover:not(:disabled) { opacity:.9 }
     .btn-primary:disabled { opacity:.45; pointer-events:none }
-    .models-modal { width:min(760px,94vw); max-height:calc(100dvh - 32px); padding:16px; display:flex; flex-direction:column; overflow:hidden }
+    .models-modal { width:min(900px,94vw); max-height:calc(100dvh - 32px); padding:16px; display:flex; flex-direction:column; overflow:hidden }
     .models-modal-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-shrink:0 }
     .models-modal-head .modal-title { margin-bottom:0 }
     .models-modal-table { display:grid; grid-template-rows:auto minmax(0,1fr); min-height:0 }
-    .models-modal-head-row, .models-modal-row { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 70px 140px; gap:10px; align-items:center; padding:8px 10px }
+    .models-modal-head-row, .models-modal-row { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 70px minmax(120px,1fr) minmax(150px,1.1fr); gap:10px; align-items:center; padding:8px 10px }
     .models-modal-head-row { color:#8a8174; font-size:11px; font-weight:800; letter-spacing:.03em; border-bottom:1px solid #eee7dc; flex-shrink:0 }
     .models-modal-list { overflow-y:auto; min-height:180px }
     .models-modal-row { border-bottom:1px solid #f3ede3; font-size:13px }
@@ -53,6 +53,10 @@
     .models-modal-pool { display:inline-flex; align-items:center; height:24px; padding:0 8px; border-radius:999px; background:#f6f0e7; color:#5c5348; font-size:11px; font-weight:750 }
     .models-modal-flags { display:flex; flex-wrap:wrap; gap:4px }
     .model-flag { display:inline-flex; align-items:center; height:22px; padding:0 7px; border-radius:999px; background:#f2ede4; color:#6b6256; font-size:11px; font-weight:700 }
+    .models-modal-degradation { display:inline-flex; align-items:center; min-height:24px; padding:3px 8px; border-radius:999px; background:#f2ede4; color:#6b6256; font-size:11px; font-weight:750; line-height:1.25 }
+    .models-modal-degradation.is-cooling { background:#fff0df; color:#a45b13 }
+    .models-modal-degradation.is-probe { background:#eee8ff; color:#6545a8 }
+    .models-modal-degradation.is-ready { background:#fff8d8; color:#8b6b00 }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
       .page-actions { width:100%; flex-wrap:wrap }
@@ -60,7 +64,7 @@
       .alias-name { justify-content:flex-start; padding:0 12px }
       .model-actions { grid-template-columns:1fr }
       .model-options { grid-template-columns:1fr }
-      .models-modal-head-row, .models-modal-row { grid-template-columns:minmax(0,1fr) 70px 132px }
+      .models-modal-head-row, .models-modal-row { grid-template-columns:minmax(0,1fr) 62px 115px 132px }
       .models-modal-name-cell { display:none }
     }
   </style>
@@ -98,6 +102,7 @@
         <span class="models-modal-name-cell">名称</span>
         <span>池</span>
         <span>能力</span>
+        <span>降级</span>
       </div>
       <div class="models-modal-list" id="models-modal-list"></div>
     </div>
@@ -122,6 +127,7 @@ let adminAuthKey = '';
 let allModels = [];
 let savedAliases = {};
 let draftAliases = {};
+let modelsModalTimer = 0;
 
 function esc(value) {
   return String(value ?? '')
@@ -200,6 +206,29 @@ function modelFlags(item) {
   return flags.map((flag) => `<span class="model-flag">${esc(flag)}</span>`).join('');
 }
 
+function formatSeconds(value) {
+  const seconds = Math.max(0, Math.ceil(Number(value || 0)));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function degradationStatus(item) {
+  const state = item.degradation || {};
+  const count = Number(state.consecutive_rate_limits || 0);
+  if (!state.status || state.status === 'normal') {
+    return '<span class="models-modal-degradation">正常</span>';
+  }
+  if (state.status === 'cooling') {
+    return `<span class="models-modal-degradation is-cooling">连续 ${count} 次 · ${formatSeconds(state.cooldown_remaining_sec)}</span>`;
+  }
+  if (state.status === 'probe') {
+    return `<span class="models-modal-degradation is-probe">连续 ${count} 次 · 探测中</span>`;
+  }
+  return `<span class="models-modal-degradation is-ready">连续 ${count} 次 · 待探测</span>`;
+}
+
 function renderModelRow(item) {
   return `
     <div class="models-modal-row">
@@ -207,28 +236,40 @@ function renderModelRow(item) {
       <span class="models-modal-name-cell" title="${esc(item.name || '')}">${esc(item.name || '—')}</span>
       <span><span class="models-modal-pool">${esc(item.pool)}</span></span>
       <span class="models-modal-flags">${modelFlags(item)}</span>
+      <span>${degradationStatus(item)}</span>
     </div>`;
 }
 
-function openModelsModal() {
-  const modal = document.getElementById('models-modal');
+async function loadModelsModal(showLoading = false) {
   const list = document.getElementById('models-modal-list');
-  list.innerHTML = '<span class="muted">加载中…</span>';
-  modal.classList.add('open');
-  modal.setAttribute('aria-hidden', 'false');
-  apiFetch('/model-mapping').then((payload) => {
+  if (showLoading) list.innerHTML = '<span class="muted">加载中…</span>';
+  try {
+    const payload = await apiFetch('/model-mapping');
     const models = payload?.data?.models || [];
     document.getElementById('models-modal-title').textContent = `可用模型 · ${models.length}`;
     list.innerHTML = models.length
       ? models.map(renderModelRow).join('')
       : '<span class="muted">无可用模型</span>';
-  }).catch((error) => {
-    list.innerHTML = `<span class="muted">${esc(error.message)}</span>`;
-  });
+  } catch (error) {
+    if (showLoading) list.innerHTML = `<span class="muted">${esc(error.message)}</span>`;
+  }
+}
+
+function openModelsModal() {
+  const modal = document.getElementById('models-modal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  loadModelsModal(true);
+  if (modelsModalTimer) window.clearInterval(modelsModalTimer);
+  modelsModalTimer = window.setInterval(() => loadModelsModal(false), 2000);
 }
 
 function closeModelsModal() {
   const modal = document.getElementById('models-modal');
+  if (modelsModalTimer) {
+    window.clearInterval(modelsModalTimer);
+    modelsModalTimer = 0;
+  }
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
 }

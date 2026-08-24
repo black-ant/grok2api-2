@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import random
 from threading import RLock
-from time import monotonic
+from time import monotonic, time
 
 
 class ModelAdmission(str, Enum):
@@ -22,6 +22,8 @@ class _ModelState:
     consecutive_rate_limits: int = 0
     cooldown_until: float = 0.0
     probe_in_flight: bool = False
+    last_delay_sec: float = 0.0
+    last_rate_limited_at: float = 0.0
 
 
 _LOCK = RLock()
@@ -66,7 +68,7 @@ def mark_rate_limited(
     retry_after_sec: int | float | None = None,
     jitter_ratio: int | float = 0.0,
 ) -> float:
-    """Record a 429 using bounded exponential backoff and return its delay."""
+    """Record a 429 with bounded, non-decreasing exponential backoff."""
     name = _normalize(model_name)
     seconds = max(0.0, float(cooldown_sec))
     retry_after = max(0.0, float(retry_after_sec or 0.0))
@@ -102,13 +104,43 @@ def mark_rate_limited(
                     configured_max,
                     local_delay + random.uniform(0.0, local_delay * ratio),
                 )
-        delay = max(local_delay, retry_after)
+        delay = max(local_delay, state.last_delay_sec, retry_after)
         state.cooldown_until = max(state.cooldown_until, now + delay)
         state.probe_in_flight = False
+        state.last_delay_sec = delay
+        state.last_rate_limited_at = time()
         from .aliases import demote_model
 
         demote_model(name)
         return delay
+
+
+def model_status_snapshot() -> dict[str, dict[str, int | float | bool | str | None]]:
+    """Return live process-local degradation state for the admin UI."""
+    now_monotonic = monotonic()
+    now_wall = time()
+    result: dict[str, dict[str, int | float | bool | str | None]] = {}
+    with _LOCK:
+        for name, state in _STATES.items():
+            remaining = max(0.0, state.cooldown_until - now_monotonic)
+            if remaining > 0:
+                status = "cooling"
+            elif state.probe_in_flight:
+                status = "probe"
+            elif state.consecutive_rate_limits > 0:
+                status = "ready_probe"
+            else:
+                continue
+            result[name] = {
+                "status": status,
+                "blocked": bool(remaining > 0 or state.probe_in_flight),
+                "consecutive_rate_limits": state.consecutive_rate_limits,
+                "cooldown_remaining_sec": round(remaining, 1),
+                "cooldown_until": round(now_wall + remaining, 3) if remaining else None,
+                "last_delay_sec": round(state.last_delay_sec, 1),
+                "last_rate_limited_at": state.last_rate_limited_at or None,
+            }
+    return result
 
 
 def mark_model_success(model_name: str) -> None:
@@ -154,6 +186,7 @@ __all__ = [
     "clear_rate_limit",
     "mark_model_success",
     "mark_rate_limited",
+    "model_status_snapshot",
     "release_probe",
     "reset_rate_limits",
 ]
