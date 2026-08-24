@@ -184,6 +184,8 @@ class AdminBatchReviewFixTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(first["added"])
         self.assertTrue(second["added"])
+        self.assertRegex(first["mutation_id"], r"^[0-9a-f]{12}$")
+        self.assertRegex(second["mutation_id"], r"^[0-9a-f]{12}$")
         self.assertEqual(
             second["data"]["aliases"]["FREE"]["stable"],
             ["grok-4.3-console", "first-model", "second-model"],

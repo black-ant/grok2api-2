@@ -7,6 +7,7 @@ Heavy handlers are split into ``tokens`` and ``batch`` sub-modules.
 import asyncio
 import re
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -96,6 +97,18 @@ def _append_model_to_alias(
     pool["stable"] = [*stable, model_name]
     aliases[alias_name] = pool
     return True
+
+
+def _alias_pool_snapshot(aliases: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    snapshot: dict[str, dict[str, list[str]]] = {}
+    for alias_name, pool in aliases.items():
+        if not isinstance(pool, dict):
+            continue
+        snapshot[str(alias_name)] = {
+            "stable": list(pool.get("stable") or []),
+            "degraded": list(pool.get("degraded") or []),
+        }
+    return snapshot
 
 
 def _sanitize_text(value: Any, *, remove_all_spaces: bool = False) -> str:
@@ -455,6 +468,12 @@ async def update_model_mapping(req: ConfigPatchRequest):
     if not isinstance(aliases, dict):
         raise ValidationError("models.aliases must be an object", param="models.aliases")
 
+    mutation_id = uuid.uuid4().hex[:12]
+    logger.info(
+        "admin model mapping replace start: mutation_id={} aliases={}",
+        mutation_id,
+        _alias_pool_snapshot(aliases),
+    )
     async with _MODEL_MAPPING_MUTATION_LOCK:
         normalized = model_aliases.normalize_alias_config(aliases)
         for alias_name, alias_cfg in model_aliases.alias_config_map().items():
@@ -463,19 +482,27 @@ async def update_model_mapping(req: ConfigPatchRequest):
         await config.update({"models": {"aliases": normalized}})
         await config.load()
         model_aliases.reset_runtime_state()
-    return {"status": "success", "message": "模型映射已更新"}
+        saved_aliases = model_aliases.alias_config_map()
+    logger.info(
+        "admin model mapping replace saved: mutation_id={} aliases={}",
+        mutation_id,
+        _alias_pool_snapshot(saved_aliases),
+    )
+    return {"status": "success", "message": "模型映射已更新", "mutation_id": mutation_id}
 
 
 @router.post("/model-mapping/append", tags=[_TAG_ADMIN_SYSTEM])
 async def append_model_mapping(req: ModelMappingAppendRequest):
     alias_name = req.alias.strip()
     model_name = req.model.strip()
+    mutation_id = uuid.uuid4().hex[:12]
     async with _MODEL_MAPPING_MUTATION_LOCK:
         await config.load()
         aliases = model_aliases.alias_config_map()
         if alias_name not in aliases:
             raise ValidationError("Unknown model alias", param="alias")
 
+        before_aliases = _alias_pool_snapshot(aliases)
         added = _append_model_to_alias(aliases, alias_name, model_name)
         normalized = model_aliases.normalize_alias_config(aliases)
         await config.update({"models": {"aliases": normalized}})
@@ -488,9 +515,21 @@ async def append_model_mapping(req: ModelMappingAppendRequest):
         *(saved_pool.get("stable") or []),
         *(saved_pool.get("degraded") or []),
     ]
+    saved = model_name in saved_models
+    logger.info(
+        "admin model mapping append: mutation_id={} alias={} model={} added={} saved={} before={} after={}",
+        mutation_id,
+        alias_name,
+        model_name,
+        added,
+        saved,
+        before_aliases,
+        _alias_pool_snapshot(saved_aliases),
+    )
     return {
         "status": "success",
-        "added": added and model_name in saved_models,
+        "added": added and saved,
+        "mutation_id": mutation_id,
         "data": {"aliases": saved_aliases},
     }
 
