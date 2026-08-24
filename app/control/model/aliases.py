@@ -70,6 +70,7 @@ class ModelResolution:
     is_virtual: bool
     candidates: tuple[str, ...] = ()
     pool: str = "stable"
+    candidate_pools: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(slots=True)
@@ -415,7 +416,7 @@ def _select_virtual_candidate(
     is_available,
     blocked: frozenset[str],
     advance: bool,
-) -> tuple[str, ModelSpec, tuple[str, ...], str] | None:
+) -> tuple[str, ModelSpec, tuple[str, ...], str, tuple[tuple[str, str], ...]] | None:
     with _ROUTING_LOCK:
         runtime = _runtime_for(alias_name, config)
         stable, degraded = _effective_pools(config, runtime)
@@ -490,7 +491,10 @@ def _select_virtual_candidate(
             pool_name=pool_name,
             advance=advance,
         )
-        return candidate, spec, (*stable, *degraded), pool_name
+        candidate_pools = tuple((model, "stable") for model in stable) + tuple(
+            (model, "degraded") for model in degraded
+        )
+        return candidate, spec, (*stable, *degraded), pool_name, candidate_pools
 
 
 def fallback_candidates(resolution: ModelResolution) -> tuple[str, ...]:
@@ -514,6 +518,18 @@ def fallback_candidates(resolution: ModelResolution) -> tuple[str, ...]:
             result.append(candidate)
             seen.add(candidate)
     return tuple(result)
+
+
+def fallback_candidate_pools(resolution: ModelResolution) -> dict[str, str]:
+    """Return effective pool names for compatible fallback candidates."""
+    if not resolution.is_virtual:
+        return {}
+    allowed = set(fallback_candidates(resolution))
+    return {
+        model: pool
+        for model, pool in resolution.candidate_pools
+        if model in allowed
+    }
 
 
 def resolve(
@@ -550,7 +566,7 @@ def resolve(
         )
         if selected is None:
             return None
-        candidate, spec, candidates, pool_name = selected
+        candidate, spec, candidates, pool_name, candidate_pools = selected
         return ModelResolution(
             model_name,
             candidate,
@@ -558,6 +574,7 @@ def resolve(
             True,
             candidates,
             pool_name,
+            candidate_pools,
         )
 
     spec = registry.get(model_name)
@@ -733,6 +750,7 @@ __all__ = [
     "alias_configs",
     "alias_map",
     "demote_model",
+    "fallback_candidate_pools",
     "fallback_candidates",
     "is_virtual_model",
     "is_resolution_usable",

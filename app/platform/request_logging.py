@@ -516,6 +516,16 @@ class RequestLogMiddleware:
             )
             request_id = uuid.uuid4().hex[:12]
             routing = state.get("request_log_routing") or {}
+            if isinstance(routing, dict):
+                routing["downstream_status"] = response_status
+                routing["downstream_outcome"] = (
+                    "success" if 200 <= response_status < 300 else "error"
+                )
+                attempts = routing.get("route_attempts")
+                if isinstance(attempts, list) and attempts:
+                    last_attempt = attempts[-1]
+                    if isinstance(last_attempt, dict):
+                        last_attempt["downstream_status"] = response_status
             audit = build_audit_record(
                 request_id=request_id,
                 created_ts=started_ts,

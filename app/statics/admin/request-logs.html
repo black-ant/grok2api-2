@@ -21,6 +21,7 @@
     .log-method { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:700 }
     .log-key-tail { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:650 }
     .log-pool { text-transform:lowercase; font-weight:650 }
+    .log-route { min-width:130px; color:#555; font-size:12px; font-weight:650 }
     .log-status { display:inline-flex; align-items:center; height:22px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:700 }
     .log-status.ok { background:#ecfdf5; color:#059669 }
     .log-status.warn { background:#fff7ed; color:#ea580c }
@@ -38,6 +39,9 @@
     .log-detail-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px }
     .log-pill { display:inline-flex; align-items:center; height:24px; padding:0 9px; border-radius:999px; background:#f5f5f5; color:#555; font-size:11px; font-weight:600 }
     .log-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px }
+    .log-routing { margin-bottom:14px; padding:10px 12px; border:1px solid #eee; border-radius:12px; background:#fff; font-size:12px; line-height:1.6 }
+    .log-routing-title { font-weight:700; margin-bottom:6px }
+    .log-attempt { display:flex; flex-wrap:wrap; gap:6px 10px; color:#555 }
     .log-detail-section { min-width:0 }
     .log-detail-label { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; margin-bottom:8px }
     .log-copy-btn { height:28px; padding:0 10px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#111; font-size:12px; font-weight:650; cursor:pointer }
@@ -70,6 +74,7 @@
           <th>方法</th>
           <th>路径</th>
           <th>模型</th>
+          <th>链路</th>
           <th>Key后5</th>
           <th>账号</th>
           <th>状态</th>
@@ -79,7 +84,7 @@
         </tr>
       </thead>
       <tbody id="log-rows">
-        <tr><td colspan="10" class="loading-cell">加载中…</td></tr>
+        <tr><td colspan="11" class="loading-cell">加载中…</td></tr>
       </tbody>
     </table>
     <div class="pager" id="log-pager">
@@ -101,6 +106,7 @@
       </div>
     </div>
     <div class="log-detail-meta" id="detail-meta"></div>
+    <div class="log-routing" id="detail-routing"></div>
     <div class="log-detail-grid">
       <div class="log-detail-section">
         <div class="log-detail-label"><span>入参</span><button type="button" class="log-copy-btn" id="copy-request-btn">复制入参</button></div>
@@ -163,6 +169,25 @@ function modelTitle(item) {
   if (routing.virtual_model && routing.virtual_model !== actual) return `${actual} / 请求 ${routing.virtual_model}`;
   if (routing.model && routing.model !== actual) return `${actual} / 请求 ${routing.model}`;
   return actual;
+}
+
+function routeTitle(item) {
+  const routing = item?.routing || {};
+  const route = routing.route || '—';
+  const fallbackCount = Number(routing.fallback_count || 0);
+  return `${route} · ${fallbackCount}次降级`;
+}
+
+function renderRouteDetail(item) {
+  const routing = item?.routing || {};
+  const attempts = Array.isArray(routing.route_attempts) ? routing.route_attempts : [];
+  const requested = routing.virtual_model || routing.model || '—';
+  const resolved = routing.resolved_model || routing.model || '—';
+  const header = `<div class="log-routing-title">请求模型 ${esc(requested)} · 实际模型 ${esc(resolved)} · 下游 ${esc(routing.downstream_status || item.status_code || '—')}</div>`;
+  const rows = attempts.length
+    ? attempts.map((attempt) => `<div class="log-attempt"><span>#${esc(attempt.sequence)}</span><span>${esc(attempt.model)}</span><span>${esc(attempt.route)}</span><span>${esc(attempt.account_pool || '—')}</span><span>上游 ${esc(attempt.upstream_status || '—')}</span><span>${esc(attempt.outcome || '—')}</span>${attempt.reason ? `<span>${esc(attempt.reason)}</span>` : ''}</div>`).join('')
+    : '<div class="log-attempt">暂无上游尝试记录</div>';
+  return `${header}${rows}`;
 }
 
 function pretty(value) {
@@ -287,7 +312,7 @@ function renderRows() {
   document.getElementById('prev-page').disabled = currentPage <= 1;
   document.getElementById('next-page').disabled = currentPage >= pageCount;
   if (!requestLogs.length) {
-    rows.innerHTML = '<tr><td colspan="10" class="loading-cell">暂无日志</td></tr>';
+    rows.innerHTML = '<tr><td colspan="11" class="loading-cell">暂无日志</td></tr>';
     return;
   }
   rows.innerHTML = requestLogs.map((item, index) => `
@@ -296,6 +321,7 @@ function renderRows() {
       <td><span class="log-method">${esc(item.method)}</span></td>
       <td class="log-path" title="${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}">${esc(item.path || '')}${item.query ? '?' + esc(item.query) : ''}</td>
       <td class="log-model" title="${esc(modelTitle(item))}">${esc(actualModel(item))}</td>
+      <td class="log-route">${esc(routeTitle(item))}</td>
       <td><span class="log-key-tail">${esc(item.routing?.routed_key_tail || '—')}</span></td>
       <td><span class="log-pool">${esc(item.routing?.pool || '—')}</span></td>
       <td><span class="log-status ${statusClass(Number(item.status_code || 0))}">${esc(item.status_code)}</span></td>
@@ -356,6 +382,7 @@ function openDetail(item) {
   if (routing.routed_key) metaItems.push(`Key ${routing.routed_key}`);
   if (routing.mode_id !== undefined && routing.mode_id !== null) metaItems.push(`Mode ${routing.mode_id}`);
   document.getElementById('detail-meta').innerHTML = metaItems.map((value) => `<span class="log-pill">${esc(value)}</span>`).join('');
+  document.getElementById('detail-routing').innerHTML = renderRouteDetail(item);
   document.getElementById('detail-request').textContent = pretty(buildRequestDetail(item));
   document.getElementById('detail-response').textContent = pretty(buildResponseDetail(item));
   overlay.classList.add('open');
@@ -418,7 +445,7 @@ function waitI18n() {
   try {
     await loadLogs();
   } catch (e) {
-    document.getElementById('log-rows').innerHTML = '<tr><td colspan="9" class="error-cell">加载失败</td></tr>';
+    document.getElementById('log-rows').innerHTML = '<tr><td colspan="11" class="error-cell">加载失败</td></tr>';
     window.showToast?.('请求日志加载失败', 'error');
   }
 })();

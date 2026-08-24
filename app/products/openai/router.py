@@ -599,6 +599,9 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     if resolved.is_virtual:
         request.state.request_log_routing["virtual_model"] = req.model
         request.state.request_log_routing["model_pool"] = resolved.pool
+        request.state.request_log_routing["fallback_candidate_pools"] = (
+            model_aliases.fallback_candidate_pools(resolved)
+        )
     request.state.request_log_routing["route"] = (
         "console" if spec.is_console_chat() else "grok"
     )

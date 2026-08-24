@@ -75,9 +75,8 @@ from app.products._model_fallback import (
     fallback_limit,
     jitter_ratio,
     max_cooldown_seconds,
-    next_fallback_candidate,
-    record_fallback,
 )
+from app.products._routing import RoutingSession
 
 
 def _to_chat_annotations(anns: list[dict]) -> list[dict]:
@@ -523,6 +522,7 @@ async def completions(
     force_token: str | None = None,
     model_fallbacks: tuple[str, ...] = (),
     request_log_routing: dict[str, Any] | None = None,
+    routing_session: RoutingSession | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for /v1/chat/completions.
 
@@ -536,6 +536,18 @@ async def completions(
     is_stream = stream if stream is not None else cfg.get_bool("features.stream", True)
     if emit_think is None:
         emit_think = cfg.get_bool("features.thinking", True)
+    model_fallback_budget = fallback_limit(
+        cfg,
+        tuple(model_fallbacks),
+        force_token=force_token,
+    )
+    route_session = routing_session or RoutingSession.from_model(
+        model,
+        candidates=tuple(model_fallbacks),
+        routing=request_log_routing,
+        fallback_budget=model_fallback_budget,
+    )
+    route_session.set_fallback_budget(model_fallback_budget)
 
     logger.info(
         "chat request accepted: model={} stream={} message_count={}",
@@ -557,6 +569,7 @@ async def completions(
             "force_token": force_token,
             "model_fallbacks": model_fallbacks,
             "request_log_routing": request_log_routing,
+            "routing_session": route_session,
         }
         if proxy_lease is None:
             return await console_completions(
@@ -582,11 +595,6 @@ async def completions(
 
     max_retries = 0 if force_token else selection_max_retries()
     retry_codes = _configured_retry_codes(cfg)
-    model_fallback_budget = fallback_limit(
-        cfg,
-        tuple(model_fallbacks),
-        force_token=force_token,
-    )
     max_attempts = max_retries + model_fallback_budget + 1
     response_id = make_response_id()
     timeout_s = cfg.get_float("chat.timeout", 120.0)
@@ -610,25 +618,17 @@ async def completions(
             for attempt in range(max_attempts):
                 admission = admit_model(current_model)
                 if admission is ModelAdmission.BLOCKED:
-                    fallback = next_fallback_candidate(
-                        tuple(model_fallbacks),
-                        model_fallback_used,
-                        model_fallback_budget,
+                    previous_model = current_model
+                    fallback_model = route_session.next_model_fallback(
+                        status=429,
+                        reason="model_cooldown",
                     )
-                    if fallback is None:
+                    if fallback_model is None:
                         raise RateLimitError(
                             f"Model {current_model!r} is cooling down and no fallback is available"
                         )
-                    fallback_index, fallback_model = fallback
-                    previous_model = current_model
                     current_model = fallback_model
-                    model_fallback_used = fallback_index + 1
-                    record_fallback(
-                        request_log_routing,
-                        from_model=previous_model,
-                        to_model=current_model,
-                        status=429,
-                    )
+                    model_fallback_used += 1
                     logger.warning(
                         "model recovery probe busy; fallback: from={} to={}",
                         previous_model,
@@ -656,6 +656,12 @@ async def completions(
                 _set_request_log_routing(
                     request_log_routing,
                     model=current_model,
+                    token=token,
+                    mode_id=selected_mode_id,
+                    pool_id=acct.pool_id,
+                )
+                route_session.begin_attempt(
+                    current_model,
                     token=token,
                     mode_id=selected_mode_id,
                     pool_id=acct.pool_id,
@@ -844,22 +850,19 @@ async def completions(
                             _should_retry_upstream(exc, retry_codes)
                             or (exc.status == 429 and model_fallback_budget > 0)
                         ):
-                            fallback = next_fallback_candidate(
-                                tuple(model_fallbacks),
-                                model_fallback_used,
-                                model_fallback_budget,
+                            fallback_model = (
+                                route_session.next_model_fallback(
+                                    status=exc.status,
+                                    reason="upstream_rate_limit",
+                                    stream_started=stream_started,
+                                )
+                                if exc.status == 429
+                                else None
                             )
-                            if exc.status == 429 and fallback is not None and not stream_started:
-                                fallback_index, fallback_model = fallback
+                            if exc.status == 429 and fallback_model is not None:
                                 previous_model = current_model
                                 current_model = fallback_model
-                                model_fallback_used = fallback_index + 1
-                                record_fallback(
-                                    request_log_routing,
-                                    from_model=previous_model,
-                                    to_model=current_model,
-                                    status=exc.status,
-                                )
+                                model_fallback_used += 1
                                 _retry = True
                                 logger.warning(
                                     "chat stream model fallback: from={} to={} status={} token={}...",
@@ -908,6 +911,16 @@ async def completions(
                         token, kind, selected_mode_id, now_s_val=now_s()
                     )
                     if success:
+                        route_session.record_success()
+                    elif _retry and current_model == route_session.current_model:
+                        route_session.record_account_retry(
+                            status=getattr(fail_exc, "status", None),
+                        )
+                    else:
+                        route_session.record_failure(
+                            status=getattr(fail_exc, "status", None),
+                        )
+                    if success:
                         asyncio.create_task(
                             _quota_sync(token, selected_mode_id)
                         ).add_done_callback(_log_task_exception)
@@ -939,25 +952,17 @@ async def completions(
     for attempt in range(max_attempts):
         admission = admit_model(current_model)
         if admission is ModelAdmission.BLOCKED:
-            fallback = next_fallback_candidate(
-                tuple(model_fallbacks),
-                model_fallback_used,
-                model_fallback_budget,
+            previous_model = current_model
+            fallback_model = route_session.next_model_fallback(
+                status=429,
+                reason="model_cooldown",
             )
-            if fallback is None:
+            if fallback_model is None:
                 raise RateLimitError(
                     f"Model {current_model!r} is cooling down and no fallback is available"
                 )
-            fallback_index, fallback_model = fallback
-            previous_model = current_model
             current_model = fallback_model
-            model_fallback_used = fallback_index + 1
-            record_fallback(
-                request_log_routing,
-                from_model=previous_model,
-                to_model=current_model,
-                status=429,
-            )
+            model_fallback_used += 1
             logger.warning(
                 "model recovery probe busy; fallback: from={} to={}",
                 previous_model,
@@ -985,6 +990,12 @@ async def completions(
         _set_request_log_routing(
             request_log_routing,
             model=current_model,
+            token=token,
+            mode_id=selected_mode_id,
+            pool_id=acct.pool_id,
+        )
+        route_session.begin_attempt(
+            current_model,
             token=token,
             mode_id=selected_mode_id,
             pool_id=acct.pool_id,
@@ -1036,22 +1047,18 @@ async def completions(
                     _should_retry_upstream(exc, retry_codes)
                     or (exc.status == 429 and model_fallback_budget > 0)
                 ):
-                    fallback = next_fallback_candidate(
-                        tuple(model_fallbacks),
-                        model_fallback_used,
-                        model_fallback_budget,
+                    fallback_model = (
+                        route_session.next_model_fallback(
+                            status=exc.status,
+                            reason="upstream_rate_limit",
+                        )
+                        if exc.status == 429
+                        else None
                     )
-                    if exc.status == 429 and fallback is not None:
-                        fallback_index, fallback_model = fallback
+                    if exc.status == 429 and fallback_model is not None:
                         previous_model = current_model
                         current_model = fallback_model
-                        model_fallback_used = fallback_index + 1
-                        record_fallback(
-                            request_log_routing,
-                            from_model=previous_model,
-                            to_model=current_model,
-                            status=exc.status,
-                        )
+                        model_fallback_used += 1
                         _retry = True
                         logger.warning(
                             "chat model fallback: from={} to={} status={} token={}...",
@@ -1093,6 +1100,16 @@ async def completions(
                 else FeedbackKind.SERVER_ERROR
             )
             await directory.feedback(token, kind, selected_mode_id, now_s_val=now_s())
+            if success:
+                route_session.record_success()
+            elif _retry and current_model == route_session.current_model:
+                route_session.record_account_retry(
+                    status=getattr(fail_exc, "status", None),
+                )
+            else:
+                route_session.record_failure(
+                    status=getattr(fail_exc, "status", None),
+                )
             if success:
                 asyncio.create_task(
                     _quota_sync(token, selected_mode_id)

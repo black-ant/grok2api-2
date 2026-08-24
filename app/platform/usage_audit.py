@@ -173,7 +173,18 @@ def operation_for_path(path: str) -> str | None:
 def _routing_summary(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
-    allowed = ("model", "resolved_model", "virtual_model", "model_pool", "pool", "mode_id", "routed_key_tail")
+    allowed = (
+        "model",
+        "resolved_model",
+        "virtual_model",
+        "route",
+        "model_pool",
+        "pool",
+        "mode_id",
+        "routed_key_tail",
+        "downstream_status",
+        "downstream_outcome",
+    )
     result = {key: value[key] for key in allowed if value.get(key) is not None}
     fallbacks = value.get("model_fallbacks")
     if isinstance(fallbacks, list):
@@ -182,6 +193,26 @@ def _routing_summary(value: object) -> dict[str, Any]:
             {"from": item["from"], "to": item["to"], "status": item.get("status")}
             for item in fallbacks
             if isinstance(item, Mapping) and isinstance(item.get("from"), str) and isinstance(item.get("to"), str)
+        ]
+    attempts = value.get("route_attempts")
+    if isinstance(attempts, list):
+        result["route_attempts"] = [
+            dict(item)
+            for item in attempts
+            if isinstance(item, Mapping)
+        ]
+        result["attempt_count"] = len(result["route_attempts"])
+        result["upstream_statuses"] = [
+            item.get("upstream_status")
+            for item in result["route_attempts"]
+            if item.get("upstream_status") is not None
+        ]
+    decisions = value.get("route_decisions")
+    if isinstance(decisions, list):
+        result["route_decisions"] = [
+            dict(item)
+            for item in decisions
+            if isinstance(item, Mapping)
         ]
     return result
 
@@ -240,6 +271,7 @@ def build_audit_record(
     routing_value = routing if isinstance(routing, Mapping) else {}
     model = routing_value.get("model") or context.get("model") or ""
     resolved_model = routing_value.get("resolved_model") or context.get("resolved_model") or ""
+    routing_summary = _routing_summary(routing)
     return {
         "schema_version": 1,
         "request_id": request_id,
@@ -263,7 +295,17 @@ def build_audit_record(
         "media_output_seconds": output_seconds,
         "duration_ms": _number(duration_ms),
         "error_code": error_code,
-        "routing": _routing_summary(routing),
+        "route": routing_summary.get("route"),
+        "upstream_statuses": routing_summary.get("upstream_statuses", []),
+        "downstream_status": routing_summary.get("downstream_status", status),
+        "downstream_outcome": routing_summary.get(
+            "downstream_outcome",
+            "success" if success else "error",
+        ),
+        "fallback_count": routing_summary.get("fallback_count", 0),
+        "fallbacks": routing_summary.get("fallbacks", []),
+        "route_attempts": routing_summary.get("route_attempts", []),
+        "routing": routing_summary,
         "response_truncated": bool(response_truncated),
     }
 
