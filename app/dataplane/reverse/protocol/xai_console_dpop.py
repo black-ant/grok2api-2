@@ -241,11 +241,11 @@ async def request_bytes(
 ) -> tuple[int, dict[str, str], bytes]:
     """Execute one Console request and materialize its response body."""
     proxy = await get_proxy_runtime()
-    lease = await proxy.acquire()
     base_url = get_config().get_str("console.base_url", "https://console.x.ai").rstrip("/")
     timeout = timeout_s or get_config().get_float("console.timeout", 120.0)
     method_upper = method.upper()
     last_error: UpstreamError | None = None
+    lease = await proxy.acquire(clearance_origin=base_url)
     for attempt in range(2):
             session = await get_session(token, lease, base_url=base_url)
             headers = build_console_headers(token, lease=lease, content_type=content_type)

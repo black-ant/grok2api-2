@@ -1,3 +1,4 @@
+from dataclasses import replace
 import unittest
 from unittest.mock import patch
 
@@ -61,6 +62,36 @@ class ModelAliasesTests(unittest.TestCase):
             aliases.fallback_candidates(resolved),
             ("grok-4.20-0309-console",),
         )
+
+    def test_alias_supported_in_api_reflects_candidate_contract(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={
+                "FREE": ["grok-4.3-console"],
+                "CUSTOM": ["grok-composer-2.5-fast"],
+            },
+        ):
+            self.assertTrue(aliases.alias_supported_in_api("FREE"))
+            self.assertFalse(aliases.alias_supported_in_api("CUSTOM"))
+            self.assertIsNone(aliases.alias_supported_in_api("grok-4.3-console"))
+
+    def test_resolution_contract_rejects_incompatible_virtual_candidate(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={"FREE": ["grok-4.3-console"]},
+        ):
+            resolved = aliases.resolve("FREE")
+
+        self.assertIsNotNone(resolved)
+        self.assertTrue(aliases.is_resolution_usable(resolved))
+        incompatible = replace(
+            resolved,
+            model="grok-4.20-fast",
+            spec=registry.resolve("grok-4.20-fast"),
+        )
+        self.assertFalse(aliases.is_resolution_usable(incompatible))
 
     def test_resolves_virtual_model_by_available_pool(self):
         def is_available(spec, pools):

@@ -72,6 +72,31 @@ class VirtualModelHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["model_fallbacks"], ())
         self.assertEqual(request.state.request_log_routing["resolved_model"], "grok-4.3-console")
 
+    async def test_virtual_model_without_route_returns_upstream_503(self):
+        request = _Request(
+            app=SimpleNamespace(state=SimpleNamespace(repository=None)),
+            state=_RequestState(),
+        )
+
+        with patch(
+            "app.products.openai.router._resolve_model_for_request",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "app.products.openai.router.model_aliases.is_virtual_model",
+            return_value=True,
+        ):
+            with self.assertRaises(UpstreamError) as raised:
+                await chat_completions_endpoint(
+                    ChatCompletionRequest(
+                        model="FREE",
+                        messages=[{"role": "user", "content": "hi"}],
+                    ),
+                    request,
+                )
+
+        self.assertEqual(raised.exception.status, 503)
+        self.assertIn("no compatible route", str(raised.exception))
+
     async def test_streaming_upstream_429_returns_http_429_before_sse(self):
         request = _Request(app=SimpleNamespace(state=SimpleNamespace(repository=None)), state=_RequestState())
 

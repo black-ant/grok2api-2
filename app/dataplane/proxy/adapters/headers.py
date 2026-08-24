@@ -329,9 +329,11 @@ def build_console_headers(
     ua = _sanitize(profile.user_agent, field="user_agent")
     cf_clearance = _sanitize(profile.cf_clearance, field="cf_clearance", strip_spaces=True)
 
-    cookie = f"sso={tok}; sso-rw={tok}"
-    if cf_clearance:
-        cookie += f"; cf_clearance={cf_clearance}"
+    cookie = build_sso_cookie(
+        tok,
+        lease=lease,
+        cf_clearance=cf_clearance or None,
+    )
 
     headers: dict[str, str] = {
         "Accept": "*/*",

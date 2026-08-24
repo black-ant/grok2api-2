@@ -177,6 +177,21 @@ def _sanitize_pool(alias_name: str, config: ModelPoolConfig) -> ModelPoolConfig:
     )
 
 
+def alias_supported_in_api(alias_name: str) -> bool | None:
+    """Return API availability for a virtual alias, or ``None`` for real models."""
+    config = alias_configs().get(alias_name)
+    if config is None:
+        return None
+    return any(_candidate_is_usable(alias_name, candidate) for candidate in config.candidates)
+
+
+def is_resolution_usable(resolution: ModelResolution) -> bool:
+    """Ensure a virtual alias resolved to a candidate matching its contract."""
+    if not resolution.is_virtual:
+        return True
+    return _candidate_is_usable(resolution.requested_model, resolution.model)
+
+
 def _raw_aliases() -> dict[str, object]:
     raw = get_config("models.aliases", {})
     return raw if isinstance(raw, dict) else {}
@@ -486,13 +501,14 @@ def fallback_candidates(resolution: ModelResolution) -> tuple[str, ...]:
 
     result: list[str] = []
     seen: set[str] = {resolution.model}
+    alias_name = getattr(resolution, "requested_model", "")
     for candidate in resolution.candidates:
         if candidate in seen:
             continue
         spec = registry.get(candidate)
         if (
             spec is not None
-            and spec.enabled
+            and _candidate_is_usable(alias_name, candidate)
             and spec.capability == resolution.spec.capability
         ):
             result.append(candidate)
@@ -712,12 +728,14 @@ __all__ = [
     "DEFAULT_STABLE_RATIO",
     "ModelPoolConfig",
     "ModelResolution",
+    "alias_supported_in_api",
     "alias_config_map",
     "alias_configs",
     "alias_map",
     "demote_model",
     "fallback_candidates",
     "is_virtual_model",
+    "is_resolution_usable",
     "list_virtual_models",
     "normalize_alias_config",
     "promote_model",

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from app.control.account.state_machine import is_manageable
 from app.platform.auth.middleware import verify_api_key
 from app.platform.config.snapshot import get_config
-from app.platform.errors import AppError, ValidationError
+from app.platform.errors import AppError, UpstreamError, ValidationError
 from app.platform.logging.logger import logger
 from app.platform.storage import image_files_dir, video_files_dir
 from app.control.model import aliases as model_aliases
@@ -119,6 +119,13 @@ async def _resolve_model_for_request(
     )
     if resolved is None:
         return None
+    if resolved.is_virtual and not model_aliases.is_resolution_usable(resolved):
+        logger.error(
+            "virtual model resolved to incompatible candidate: alias={} candidate={}",
+            model_name,
+            resolved.model,
+        )
+        return None
     if (
         pools is not None
         and not resolved.is_virtual
@@ -154,6 +161,8 @@ def _standard_model_entry(
     created: int,
     supported_in_api: bool = True,
     availability_note: str | None = None,
+    virtual: bool = False,
+    resolved_model: str | None = None,
 ) -> dict[str, object]:
     entry: dict[str, object] = {
         "id": model_id,
@@ -166,6 +175,10 @@ def _standard_model_entry(
     if not supported_in_api:
         if availability_note:
             entry["availability_note"] = availability_note
+    if virtual:
+        entry["virtual"] = True
+        if resolved_model:
+            entry["resolved_model"] = resolved_model
     return entry
 
 
@@ -306,21 +319,26 @@ async def list_models(
             return Response(status_code=304, headers=headers)
         return Response(content=body, media_type="application/json", headers=headers)
 
-    return JSONResponse(
-        {
-            "object": "list",
-            "data": [
-                _standard_model_entry(
-                    model_id=model_id,
-                    public_name=public_name,
-                    created=created,
-                    supported_in_api=_spec.supported_in_api,
-                    availability_note=_spec.availability_note,
-                )
-                for model_id, _spec, public_name in entries
-            ],
-        }
-    )
+    data = []
+    for model_id, spec, public_name in entries:
+        virtual = model_id != spec.model_name
+        supported_in_api = (
+            model_aliases.alias_supported_in_api(model_id)
+            if virtual
+            else spec.supported_in_api
+        )
+        data.append(
+            _standard_model_entry(
+                model_id=model_id,
+                public_name=public_name,
+                created=created,
+                supported_in_api=bool(supported_in_api),
+                availability_note=spec.availability_note,
+                virtual=virtual,
+                resolved_model=spec.model_name if virtual else None,
+            )
+        )
+    return JSONResponse({"object": "list", "data": data})
 
 
 @router.get(
@@ -340,15 +358,23 @@ async def get_model_endpoint(model_id: str, request: Request):
             },
             status_code=404,
         )
+    supported_in_api = (
+        model_aliases.alias_supported_in_api(resolved.requested_model)
+        if resolved.is_virtual
+        else resolved.spec.supported_in_api
+    )
     payload = {
             "id": resolved.requested_model,
             "object": "model",
             "created": int(time.time()),
             "owned_by": "xai",
             "name": resolved.requested_model if resolved.is_virtual else resolved.spec.public_name,
-            "supported_in_api": bool(resolved.spec.supported_in_api),
+            "supported_in_api": bool(supported_in_api),
         }
-    if not resolved.spec.supported_in_api and resolved.spec.availability_note:
+    if resolved.is_virtual:
+        payload["virtual"] = True
+        payload["resolved_model"] = resolved.model
+    if not supported_in_api and resolved.spec.availability_note:
         payload["availability_note"] = resolved.spec.availability_note
     return JSONResponse(payload)
 
@@ -554,6 +580,11 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     _validate_chat(req)
     resolved = await _resolve_model_for_request(req.model, request)
     if resolved is None:
+        if model_aliases.is_virtual_model(req.model):
+            raise UpstreamError(
+                f"Virtual model {req.model!r} has no compatible route.",
+                status=503,
+            )
         raise ValidationError(
             f"Model {req.model!r} does not exist or you do not have access to it.",
             param="model",
@@ -568,6 +599,9 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     if resolved.is_virtual:
         request.state.request_log_routing["virtual_model"] = req.model
         request.state.request_log_routing["model_pool"] = resolved.pool
+    request.state.request_log_routing["route"] = (
+        "console" if spec.is_console_chat() else "grok"
+    )
     from app.platform.config.snapshot import get_config
 
     cfg = get_config()

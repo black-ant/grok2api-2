@@ -1,11 +1,28 @@
 import unittest
 
+from app.control.proxy.models import ProxyLease
 from app.control.model import registry
+from app.dataplane.proxy.adapters.headers import build_console_headers
 from app.dataplane.reverse.protocol.xai_console_chat import build_console_payload
 from app.products.openai.router import _codex_model_catalog
 
 
 class ConsoleModelPayloadTests(unittest.TestCase):
+    def test_console_headers_keep_full_clearance_cookie_bundle(self):
+        lease = ProxyLease(
+            lease_id="lease-console",
+            cf_cookies="__cf_bm=bm-token; cf_clearance=clearance-token",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/136.0.0.0",
+        )
+
+        cookie = build_console_headers("sso-token", lease=lease)["Cookie"]
+
+        self.assertEqual(
+            cookie,
+            "sso=sso-token; sso-rw=sso-token; __cf_bm=bm-token; "
+            "cf_clearance=clearance-token",
+        )
+
     def test_remote_media_and_audio_models_are_cataloged(self):
         expected = {
             "grok-imagine-image-quality": (True, True),

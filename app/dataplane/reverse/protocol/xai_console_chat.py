@@ -326,10 +326,14 @@ async def stream_console_chat(
     from app.dataplane.proxy import get_proxy_runtime
     from app.dataplane.proxy.adapters.headers import build_console_headers
     from app.dataplane.proxy.adapters.session import ResettableSession, build_session_kwargs
-    from app.dataplane.reverse.runtime.endpoint_table import CONSOLE_RESPONSES
+    from app.dataplane.reverse.runtime.endpoint_table import CONSOLE_BASE, CONSOLE_RESPONSES
 
     proxy = await get_proxy_runtime()
-    lease = proxy_lease if proxy_lease is not None else await proxy.acquire()
+    lease = (
+        proxy_lease
+        if proxy_lease is not None
+        else await proxy.acquire(clearance_origin=CONSOLE_BASE)
+    )
 
     headers = build_console_headers(token, lease=lease)
     payload_bytes = orjson.dumps(payload)
