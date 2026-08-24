@@ -24,6 +24,44 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(resolved.model, "grok-4.3-console")
         self.assertTrue(resolved.is_virtual)
 
+    def test_free_alias_ignores_non_console_and_unsupported_candidates(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={
+                "FREE": [
+                    "grok-composer-2.5-fast",
+                    "grok-4.20-fast",
+                ]
+            },
+        ):
+            resolved = aliases.resolve("FREE")
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.model, "grok-4.3-console")
+        self.assertTrue(resolved.spec.is_console_chat())
+        self.assertTrue(resolved.spec.supported_in_api)
+
+    def test_free_alias_keeps_only_supported_console_fallbacks(self):
+        with patch.object(
+            aliases,
+            "get_config",
+            return_value={
+                "FREE": {
+                    "stable": ["grok-4.20-fast", "grok-4.3-console"],
+                    "degraded": ["grok-composer-2.5-fast", "grok-4.20-0309-console"],
+                }
+            },
+        ):
+            resolved = aliases.resolve("FREE")
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.model, "grok-4.3-console")
+        self.assertEqual(
+            aliases.fallback_candidates(resolved),
+            ("grok-4.20-0309-console",),
+        )
+
     def test_resolves_virtual_model_by_available_pool(self):
         def is_available(spec, pools):
             return spec.model_name == "grok-4.3-beta" and "super" in pools

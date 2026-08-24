@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from app.platform.config.snapshot import get_config
 
 from . import registry
+from .enums import Capability
 from .spec import ModelSpec
 
 
@@ -47,6 +48,10 @@ DEFAULT_ALIAS_CONFIG: dict[str, ModelPoolConfig] = {
         stable=("grok-4.20-auto",),
         degraded=("grok-4.3-beta",),
     ),
+}
+
+_CORE_ALIAS_CAPABILITIES: dict[str, Capability] = {
+    "FREE": Capability.CONSOLE_CHAT,
 }
 
 
@@ -145,6 +150,33 @@ def _parse_pool(value: object) -> ModelPoolConfig:
     )
 
 
+def _candidate_is_usable(alias_name: str, candidate: str) -> bool:
+    spec = registry.get(candidate)
+    if spec is None or not spec.enabled or not spec.supported_in_api:
+        return False
+    required_capability = _CORE_ALIAS_CAPABILITIES.get(alias_name)
+    return required_capability is None or bool(spec.capability & required_capability)
+
+
+def _sanitize_pool(alias_name: str, config: ModelPoolConfig) -> ModelPoolConfig:
+    stable = _unique(
+        candidate
+        for candidate in config.stable
+        if _candidate_is_usable(alias_name, candidate)
+    )
+    degraded = _unique(
+        candidate
+        for candidate in config.degraded
+        if candidate not in stable and _candidate_is_usable(alias_name, candidate)
+    )
+    return ModelPoolConfig(
+        stable=stable,
+        degraded=degraded,
+        stable_ratio=config.stable_ratio,
+        degraded_ratio=config.degraded_ratio,
+    )
+
+
 def _raw_aliases() -> dict[str, object]:
     raw = get_config("models.aliases", {})
     return raw if isinstance(raw, dict) else {}
@@ -161,7 +193,7 @@ def alias_configs() -> dict[str, ModelPoolConfig]:
     for virtual_model, value in _raw_aliases().items():
         name = str(virtual_model).strip()
         if name:
-            result[name] = _parse_pool(value)
+            result[name] = _sanitize_pool(name, _parse_pool(value))
     for name, default in DEFAULT_ALIAS_CONFIG.items():
         current = result.get(name)
         if current is None or not current.candidates:
@@ -184,7 +216,7 @@ def normalize_alias_config(value: object) -> dict[str, dict[str, Any]]:
     for virtual_model, pool in value.items():
         name = str(virtual_model).strip()
         if name:
-            result[name] = _parse_pool(pool).as_dict()
+            result[name] = _sanitize_pool(name, _parse_pool(pool)).as_dict()
     return result
 
 
