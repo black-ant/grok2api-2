@@ -650,10 +650,14 @@ function renderBatchResults() {
 }
 
 async function refreshAliasCache() {
-  const payload = await apiFetch('/model-mapping');
-  aliasCache = normalizeAliases(payload?.data?.aliases);
-  aliasCacheLoaded = true;
-  return aliasCache;
+  const operation = aliasMutationQueue.then(async () => {
+    const payload = await apiFetch('/model-mapping');
+    aliasCache = normalizeAliases(payload?.data?.aliases);
+    aliasCacheLoaded = true;
+    return aliasCache;
+  });
+  aliasMutationQueue = operation.catch(() => {});
+  return operation;
 }
 
 async function addModelToAlias(modelId, aliasName) {

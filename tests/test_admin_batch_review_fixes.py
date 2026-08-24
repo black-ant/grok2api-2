@@ -174,6 +174,11 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
 
         self.assertIn("let aliasMutationQueue = Promise.resolve();", html)
         self.assertIn("const pendingAliasAdds = new Set();", html)
+        self.assertIn(
+            "async function refreshAliasCache() {\n"
+            "  const operation = aliasMutationQueue.then(async () => {",
+            html,
+        )
         self.assertIn("const operation = aliasMutationQueue.then(async () =>", html)
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
         self.assertIn("加入中…", html)
