@@ -239,6 +239,8 @@ let accountPoolFilter = '';
 const VIRTUAL_MODEL_ALIASES = ['FREE', 'SUPER'];
 let aliasCache = { FREE: { stable: [], degraded: [] }, SUPER: { stable: [], degraded: [] } };
 let aliasCacheLoaded = false;
+let aliasMutationQueue = Promise.resolve();
+const pendingAliasAdds = new Set();
 
 function esc(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -548,6 +550,14 @@ function aliasHasModel(aliasName, modelId) {
   return aliasCacheLoaded && [...(pool.stable || []), ...(pool.degraded || [])].includes(modelId);
 }
 
+function aliasAddKey(aliasName, modelId) {
+  return `${aliasName}\u0000${modelId}`;
+}
+
+function aliasAddPending(aliasName, modelId) {
+  return pendingAliasAdds.has(aliasAddKey(aliasName, modelId));
+}
+
 function renderBatchResults() {
   const container = document.getElementById('batch-results');
   if (!container) return;
@@ -565,6 +575,8 @@ function renderBatchResults() {
     const pool = item.pool || model.pool || 'default';
     const freeAdded = aliasHasModel('FREE', item.id);
     const superAdded = aliasHasModel('SUPER', item.id);
+    const freePending = aliasAddPending('FREE', item.id);
+    const superPending = aliasAddPending('SUPER', item.id);
     return `
       <tr class="${status === 'available' ? 'is-pass' : 'is-fail'}">
         <td>
@@ -575,8 +587,8 @@ function renderBatchResults() {
         <td>${esc(batchResultText(item))}</td>
         <td>
           <div class="result-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="FREE" data-model-id="${esc(item.id)}" ${!canAdd || freeAdded ? 'disabled' : ''}>${freeAdded ? '已在 free' : '加入 free'}</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="SUPER" data-model-id="${esc(item.id)}" ${!canAdd || superAdded ? 'disabled' : ''}>${superAdded ? '已在 super' : '加入 super'}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="FREE" data-model-id="${esc(item.id)}" ${!canAdd || freeAdded || freePending ? 'disabled' : ''}>${freePending ? '加入中…' : freeAdded ? '已在 free' : '加入 free'}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-alias="SUPER" data-model-id="${esc(item.id)}" ${!canAdd || superAdded || superPending ? 'disabled' : ''}>${superPending ? '加入中…' : superAdded ? '已在 super' : '加入 super'}</button>
           </div>
         </td>
       </tr>`;
@@ -607,25 +619,37 @@ async function refreshAliasCache() {
 }
 
 async function addModelToAlias(modelId, aliasName) {
-  const payload = await apiFetch('/model-mapping');
-  const aliases = normalizeAliases(payload?.data?.aliases);
-  const pool = aliases[aliasName] || { stable: [], degraded: [] };
-  if ([...(pool.stable || []), ...(pool.degraded || [])].includes(modelId)) {
-    aliasCache = aliases;
+  const key = aliasAddKey(aliasName, modelId);
+  if (pendingAliasAdds.has(key)) return 'pending';
+  pendingAliasAdds.add(key);
+  const operation = aliasMutationQueue.then(async () => {
+    const payload = await apiFetch('/model-mapping');
+    const aliases = normalizeAliases(payload?.data?.aliases);
+    const pool = aliases[aliasName] || { stable: [], degraded: [] };
+    if ([...(pool.stable || []), ...(pool.degraded || [])].includes(modelId)) {
+      aliasCache = aliases;
+      aliasCacheLoaded = true;
+      return 'exists';
+    }
+    pool.stable = pool.stable || [];
+    pool.stable.push(modelId);
+    aliases[aliasName] = pool;
+    await apiFetch('/model-mapping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: { aliases } }),
+    });
+    aliasCache = normalizeAliases(aliases);
     aliasCacheLoaded = true;
-    return 'exists';
-  }
-  pool.stable = pool.stable || [];
-  pool.stable.push(modelId);
-  aliases[aliasName] = pool;
-  await apiFetch('/model-mapping', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ models: { aliases } }),
+    return 'added';
   });
-  aliasCache = normalizeAliases(aliases);
-  aliasCacheLoaded = true;
-  return 'added';
+  aliasMutationQueue = operation.catch(() => {});
+  try {
+    return await operation;
+  } finally {
+    pendingAliasAdds.delete(key);
+    renderBatchResults();
+  }
 }
 
 async function addBatchResultToAlias(button) {
@@ -635,7 +659,9 @@ async function addBatchResultToAlias(button) {
   button.disabled = true;
   try {
     const result = await addModelToAlias(modelId, aliasName);
-    window.showToast?.(result === 'exists' ? `已在 ${aliasName}` : `已加入 ${aliasName}`, 'success');
+    if (result !== 'pending') {
+      window.showToast?.(result === 'exists' ? `已在 ${aliasName}` : `已加入 ${aliasName}`, 'success');
+    }
   } catch (error) {
     window.showToast?.(`加入失败：${error.message}`, 'error');
   } finally {

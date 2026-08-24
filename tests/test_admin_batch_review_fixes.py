@@ -169,6 +169,15 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
         self.assertIn("function renderBatchModels", html)
         self.assertIn("id=\"batch-model-list\"", html)
 
+    def test_batch_alias_adds_are_serialized(self):
+        html = Path("app/statics/admin/grok-capability.html").read_text(encoding="utf-8")
+
+        self.assertIn("let aliasMutationQueue = Promise.resolve();", html)
+        self.assertIn("const pendingAliasAdds = new Set();", html)
+        self.assertIn("const operation = aliasMutationQueue.then(async () =>", html)
+        self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
+        self.assertIn("加入中…", html)
+
 
 class AdminTokenTaskReviewFixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
