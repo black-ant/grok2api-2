@@ -25,7 +25,7 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(resolved.model, "grok-4.3-console")
         self.assertTrue(resolved.is_virtual)
 
-    def test_free_alias_ignores_non_console_and_unsupported_candidates(self):
+    def test_free_alias_keeps_configured_chat_candidates(self):
         with patch.object(
             aliases,
             "get_config",
@@ -39,11 +39,11 @@ class ModelAliasesTests(unittest.TestCase):
             resolved = aliases.resolve("FREE")
 
         self.assertIsNotNone(resolved)
-        self.assertEqual(resolved.model, "grok-4.3-console")
-        self.assertTrue(resolved.spec.is_console_chat())
+        self.assertEqual(resolved.model, "grok-4.20-fast")
+        self.assertTrue(resolved.spec.is_chat())
         self.assertTrue(resolved.spec.supported_in_api)
 
-    def test_free_alias_keeps_only_supported_console_fallbacks(self):
+    def test_free_alias_keeps_configured_chat_and_console_candidates(self):
         with patch.object(
             aliases,
             "get_config",
@@ -57,10 +57,18 @@ class ModelAliasesTests(unittest.TestCase):
             resolved = aliases.resolve("FREE")
 
         self.assertIsNotNone(resolved)
-        self.assertEqual(resolved.model, "grok-4.3-console")
+        self.assertEqual(resolved.model, "grok-4.20-fast")
+        self.assertEqual(
+            resolved.candidates,
+            (
+                "grok-4.20-fast",
+                "grok-4.3-console",
+                "grok-4.20-0309-console",
+            ),
+        )
         self.assertEqual(
             aliases.fallback_candidates(resolved),
-            ("grok-4.20-0309-console",),
+            (),
         )
 
     def test_alias_supported_in_api_reflects_candidate_contract(self):
@@ -88,7 +96,7 @@ class ModelAliasesTests(unittest.TestCase):
 
         self.assertEqual(normalized["CUSTOM"]["stable"], ["unregistered-model"])
 
-    def test_resolution_contract_rejects_incompatible_virtual_candidate(self):
+    def test_resolution_contract_rejects_unsupported_virtual_candidate(self):
         with patch.object(
             aliases,
             "get_config",
@@ -100,8 +108,8 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertTrue(aliases.is_resolution_usable(resolved))
         incompatible = replace(
             resolved,
-            model="grok-4.20-fast",
-            spec=registry.resolve("grok-4.20-fast"),
+            model="grok-composer-2.5-fast",
+            spec=registry.resolve("grok-composer-2.5-fast"),
         )
         self.assertFalse(aliases.is_resolution_usable(incompatible))
 
@@ -138,6 +146,49 @@ class ModelAliasesTests(unittest.TestCase):
 
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.model, "grok-4.20-0309-console")
+
+    def test_free_round_robins_configured_chat_candidates(self):
+        config = {
+            "FREE": {
+                "stable": [
+                    "grok-chat-fast",
+                    "grok-4.20-0309-non-reasoning",
+                    "grok-4.20-fast",
+                    "grok-4.3-fast",
+                ],
+                "degraded": ["grok-4.20-0309-console"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            resolved = [aliases.resolve("FREE") for _ in range(4)]
+
+        self.assertEqual(
+            [item.model for item in resolved],
+            [
+                "grok-chat-fast",
+                "grok-4.20-0309-non-reasoning",
+                "grok-4.20-fast",
+                "grok-4.3-fast",
+            ],
+        )
+        self.assertTrue(all(item.pool == "stable" for item in resolved))
+
+    def test_virtual_resolution_does_not_return_blocked_fallback(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": ["grok-4.20-0309-console"],
+            }
+        }
+        with patch.object(aliases, "get_config", return_value=config):
+            resolved = aliases.resolve(
+                "FREE",
+                blocked_model_names=frozenset(
+                    {"grok-4.3-console", "grok-4.20-0309-console"}
+                ),
+            )
+
+        self.assertIsNone(resolved)
 
     def test_virtual_model_fallback_candidates_follow_mapping_order(self):
         with patch.object(

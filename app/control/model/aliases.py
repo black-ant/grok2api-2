@@ -11,7 +11,6 @@ from typing import Any, Iterable
 from app.platform.config.snapshot import get_config
 
 from . import registry
-from .enums import Capability
 from .spec import ModelSpec
 
 
@@ -49,11 +48,6 @@ DEFAULT_ALIAS_CONFIG: dict[str, ModelPoolConfig] = {
         degraded=("grok-4.3-beta",),
     ),
 }
-
-_CORE_ALIAS_CAPABILITIES: dict[str, Capability] = {
-    "FREE": Capability.CONSOLE_CHAT,
-}
-
 
 @dataclass(frozen=True)
 class ModelResolution:
@@ -151,12 +145,9 @@ def _parse_pool(value: object) -> ModelPoolConfig:
     )
 
 
-def _candidate_is_usable(alias_name: str, candidate: str) -> bool:
+def _candidate_is_usable(_alias_name: str, candidate: str) -> bool:
     spec = registry.get(candidate)
-    if spec is None or not spec.enabled or not spec.supported_in_api:
-        return False
-    required_capability = _CORE_ALIAS_CAPABILITIES.get(alias_name)
-    return required_capability is None or bool(spec.capability & required_capability)
+    return spec is not None and spec.enabled and spec.supported_in_api
 
 
 def _sanitize_pool(alias_name: str, config: ModelPoolConfig) -> ModelPoolConfig:
@@ -465,9 +456,8 @@ def _select_virtual_candidate(
                 break
 
         if selected is None:
-            # Preserve the previous behavior when every model is cooling down or
-            # the test/runtime account snapshot is unavailable: return an enabled
-            # candidate and let the downstream admission/fallback path decide.
+            # If the account snapshot is unavailable, ignore pool availability,
+            # but never bypass a model cooldown.
             for pool_name, candidates, cursor, cursor_name in ordered_pools:
                 picked = _pick_from_pool(
                     candidates,
@@ -477,7 +467,7 @@ def _select_virtual_candidate(
                     available_pools=available_pools,
                     is_available=is_available,
                     blocked=blocked,
-                    allow_blocked=True,
+                    allow_blocked=False,
                     ignore_pool_availability=True,
                     advance=advance,
                 )

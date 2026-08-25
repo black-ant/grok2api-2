@@ -39,6 +39,16 @@
     .btn-primary { height:36px; padding:0 15px; border-radius:11px; background:#111; color:#fff !important; -webkit-text-fill-color:#fff; border:1px solid #111; font-weight:750; box-shadow:0 8px 18px rgba(17,17,17,.08) }
     .btn-primary:hover:not(:disabled) { opacity:.9 }
     .btn-primary:disabled { opacity:.45; pointer-events:none }
+    .availability-modal { width:min(560px,94vw); padding:16px }
+    .availability-form { display:grid; gap:8px }
+    .availability-controls { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px }
+    .availability-controls select { width:100%; height:36px; min-width:0; border:1px solid #d8d2c7; border-radius:11px; background:#fff; padding:0 11px; font:inherit }
+    .availability-result { display:grid; gap:6px; margin-top:12px; padding:11px 12px; border:1px solid #e8e1d6; border-radius:12px; background:#fffdf9; color:#24201b; font-size:12px }
+    .availability-result.is-pass { border-color:#b7dfbd; background:#f2fbf3 }
+    .availability-result.is-fail { border-color:#f0c8a9; background:#fff7ef }
+    .availability-result-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-weight:800 }
+    .availability-result-status { font-size:13px }
+    .availability-result-meta { color:#766d60; overflow-wrap:anywhere }
     .models-modal { width:min(900px,94vw); max-height:calc(100dvh - 32px); padding:16px; display:flex; flex-direction:column; overflow:hidden }
     .models-modal-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-shrink:0 }
     .models-modal-head .modal-title { margin-bottom:0 }
@@ -79,6 +89,7 @@
       <span class="status">稳定 95% · 降级 5% 探测</span>
       <span class="status" id="status">加载中…</span>
       <button class="btn-line" id="models-btn" type="button">可用模型</button>
+      <button class="btn-line" id="availability-btn" type="button" disabled>模型是否可用</button>
       <button class="btn-line" id="reset-btn" type="button" disabled>重置</button>
       <button class="btn-line" id="restore-btn" type="button">恢复默认</button>
       <button class="btn-primary" id="save-btn" type="button" disabled>保存</button>
@@ -89,6 +100,24 @@
     <div class="mapping-form" id="mapping-form"></div>
   </section>
 </main>
+
+<div class="modal-overlay" id="availability-modal" aria-hidden="true">
+  <div class="modal availability-modal" role="dialog" aria-modal="true" aria-labelledby="availability-modal-title">
+    <div class="models-modal-head">
+      <div class="modal-title" id="availability-modal-title">模型是否可用</div>
+      <button type="button" class="btn btn-ghost btn-sm" data-availability-close>关闭</button>
+    </div>
+    <div class="availability-form">
+      <div class="availability-controls">
+        <select id="availability-model-select" aria-label="选择模型">
+          <option value="">选择模型</option>
+        </select>
+        <button class="btn-primary" id="availability-test-btn" type="button" disabled>测试</button>
+      </div>
+    </div>
+    <div class="availability-result" id="availability-result" hidden></div>
+  </div>
+</div>
 
 <div class="modal-overlay" id="models-modal" aria-hidden="true">
   <div class="modal models-modal" role="dialog" aria-modal="true" aria-labelledby="models-modal-title">
@@ -128,6 +157,7 @@ let allModels = [];
 let savedAliases = {};
 let draftAliases = {};
 let modelsModalTimer = 0;
+let availabilityRunning = false;
 
 function esc(value) {
   return String(value ?? '')
@@ -194,6 +224,97 @@ function modelLabel(item) {
 
 function setStatus(text) {
   document.getElementById('status').textContent = text;
+}
+
+function testableModels() {
+  return allModels.filter((item) => item.chat || item.console);
+}
+
+function syncAvailabilityControls() {
+  const select = document.getElementById('availability-model-select');
+  const testButton = document.getElementById('availability-test-btn');
+  const openButton = document.getElementById('availability-btn');
+  if (!select || !testButton || !openButton) return;
+  testButton.disabled = availabilityRunning || !select.value;
+  openButton.disabled = !testableModels().length;
+}
+
+function renderAvailabilityOptions() {
+  const select = document.getElementById('availability-model-select');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">选择模型</option>'
+    + testableModels()
+      .map((item) => `<option value="${esc(item.id)}">${esc(item.id)} · ${esc(item.name || item.id)}</option>`)
+      .join('');
+  if (testableModels().some((item) => item.id === current)) select.value = current;
+  syncAvailabilityControls();
+}
+
+function closeAvailabilityModal() {
+  const modal = document.getElementById('availability-modal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+function openAvailabilityModal() {
+  renderAvailabilityOptions();
+  const modal = document.getElementById('availability-modal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => document.getElementById('availability-model-select')?.focus(), 0);
+}
+
+function renderAvailabilityResult(report, error = null) {
+  const result = document.getElementById('availability-result');
+  if (!result) return;
+  if (error) {
+    result.className = 'availability-result is-fail';
+    result.innerHTML = `<div class="availability-result-head"><span class="availability-result-status">测试失败</span></div><div class="availability-result-meta">${esc(error.message || '请求失败')}</div>`;
+    result.hidden = false;
+    return;
+  }
+  const item = report?.results?.[0] || {};
+  const available = item.status === 'available';
+  const details = [
+    item.http_status ? `HTTP ${item.http_status}` : '',
+    item.duration_ms ? `${Math.round(Number(item.duration_ms))}ms` : '',
+  ].filter(Boolean).join(' · ');
+  const message = item.message || item.body_preview || item.response_preview || '—';
+  result.className = `availability-result ${available ? 'is-pass' : 'is-fail'}`;
+  result.innerHTML = `
+    <div class="availability-result-head">
+      <span class="availability-result-status">${available ? '可用' : '不可用'}</span>
+      <span>${esc(details || '无请求结果')}</span>
+    </div>
+    <div class="availability-result-meta">${esc(message)}</div>`;
+  result.hidden = false;
+}
+
+async function testModelAvailability() {
+  const modelId = document.getElementById('availability-model-select')?.value || '';
+  if (!modelId || availabilityRunning) return;
+  const result = document.getElementById('availability-result');
+  availabilityRunning = true;
+  if (result) {
+    result.className = 'availability-result';
+    result.textContent = '测试中…';
+    result.hidden = false;
+  }
+  syncAvailabilityControls();
+  try {
+    const report = await apiFetch('/grok-capability/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId, selection_mode: 'routing' }),
+    });
+    renderAvailabilityResult(report);
+  } catch (error) {
+    renderAvailabilityResult(null, error);
+  } finally {
+    availabilityRunning = false;
+    syncAvailabilityControls();
+  }
 }
 
 function modelFlags(item) {
@@ -345,6 +466,7 @@ async function loadMapping() {
   savedAliases = normalizeAliases(payload?.data?.aliases);
   draftAliases = normalizeAliases(savedAliases);
   render();
+  syncAvailabilityControls();
 }
 
 async function saveMapping() {
@@ -402,11 +524,19 @@ function waitI18n() {
     window.showToast?.(`恢复默认失败: ${error.message}`, 'error');
   }));
   document.getElementById('models-btn').addEventListener('click', openModelsModal);
+  document.getElementById('availability-btn').addEventListener('click', openAvailabilityModal);
+  document.getElementById('availability-model-select').addEventListener('change', syncAvailabilityControls);
+  document.getElementById('availability-test-btn').addEventListener('click', () => testModelAvailability().catch((error) => renderAvailabilityResult(null, error)));
+  document.querySelectorAll('[data-availability-close]').forEach((node) => node.addEventListener('click', closeAvailabilityModal));
+  document.getElementById('availability-modal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeAvailabilityModal();
+  });
   document.querySelectorAll('[data-models-close]').forEach((node) => node.addEventListener('click', closeModelsModal));
   document.getElementById('models-modal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModelsModal();
   });
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeAvailabilityModal();
     if (event.key === 'Escape') closeModelsModal();
   });
   try {
