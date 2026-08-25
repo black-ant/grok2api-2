@@ -218,13 +218,20 @@ def alias_configs() -> dict[str, ModelPoolConfig]:
 
 
 def alias_config_map() -> dict[str, dict[str, Any]]:
-    """Return the normalized pool configuration used by the admin API."""
+    """Return the configured pool associations used by the admin API."""
 
-    return {name: config.as_dict() for name, config in alias_configs().items()}
+    result: dict[str, dict[str, Any]] = {}
+    for virtual_model, pool in _raw_aliases().items():
+        name = str(virtual_model).strip()
+        if name:
+            result[name] = _parse_pool(pool).as_dict()
+    for name, default in DEFAULT_ALIAS_CONFIG.items():
+        result.setdefault(name, default.as_dict())
+    return result
 
 
 def normalize_alias_config(value: object) -> dict[str, dict[str, Any]]:
-    """Normalize an admin payload while accepting both old arrays and new pools."""
+    """Normalize an admin payload without checking model availability."""
 
     if not isinstance(value, dict):
         return {}
@@ -232,7 +239,7 @@ def normalize_alias_config(value: object) -> dict[str, dict[str, Any]]:
     for virtual_model, pool in value.items():
         name = str(virtual_model).strip()
         if name:
-            result[name] = _sanitize_pool(name, _parse_pool(pool)).as_dict()
+            result[name] = _parse_pool(pool).as_dict()
     return result
 
 

@@ -76,6 +76,18 @@ class ModelAliasesTests(unittest.TestCase):
             self.assertFalse(aliases.alias_supported_in_api("CUSTOM"))
             self.assertIsNone(aliases.alias_supported_in_api("grok-4.3-console"))
 
+    def test_normalize_alias_config_preserves_binding_targets(self):
+        normalized = aliases.normalize_alias_config(
+            {
+                "CUSTOM": {
+                    "stable": ["unregistered-model"],
+                    "degraded": [],
+                }
+            }
+        )
+
+        self.assertEqual(normalized["CUSTOM"]["stable"], ["unregistered-model"])
+
     def test_resolution_contract_rejects_incompatible_virtual_candidate(self):
         with patch.object(
             aliases,

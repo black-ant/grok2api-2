@@ -687,9 +687,6 @@ async function addModelToAlias(modelId, aliasName) {
     });
     aliasCache = normalizeAliases(payload?.data?.aliases);
     aliasCacheLoaded = true;
-    if (!aliasHasModel(aliasName, modelId)) {
-      throw new Error(`模型未被保存到 ${aliasName}`);
-    }
     return payload?.added ? 'added' : 'exists';
   });
   aliasMutationQueue = operation.catch(() => {});

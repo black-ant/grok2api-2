@@ -191,6 +191,47 @@ class AdminBatchReviewFixTests(unittest.IsolatedAsyncioTestCase):
             ["grok-4.3-console", "first-model", "second-model"],
         )
 
+    async def test_model_mapping_append_creates_binding_without_alias_validation(self):
+        state = {
+            "FREE": {
+                "stable": [],
+                "degraded": [],
+                "stable_ratio": 95,
+                "degraded_ratio": 5,
+            }
+        }
+
+        async def apply_update(patch):
+            state.clear()
+            state.update(deepcopy(patch["models"]["aliases"]))
+
+        fake_config = SimpleNamespace(
+            load=AsyncMock(),
+            update=AsyncMock(side_effect=apply_update),
+        )
+
+        with (
+            patch("app.products.web.admin.config", fake_config),
+            patch(
+                "app.products.web.admin.model_aliases.alias_config_map",
+                side_effect=lambda: deepcopy(state),
+            ),
+            patch(
+                "app.products.web.admin.model_aliases.normalize_alias_config",
+                side_effect=lambda value: deepcopy(value),
+            ),
+            patch("app.products.web.admin.model_aliases.reset_runtime_state"),
+        ):
+            result = await append_model_mapping(
+                ModelMappingAppendRequest(alias="CUSTOM", model="unregistered-model")
+            )
+
+        self.assertTrue(result["added"])
+        self.assertEqual(
+            result["data"]["aliases"]["CUSTOM"]["stable"],
+            ["unregistered-model"],
+        )
+
 
 class RedisRepositoryReviewFixTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_accounts_reads_many_tokens_with_one_pipeline(self):
@@ -268,7 +309,7 @@ class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
         )
         self.assertIn("apiFetch('/model-mapping/append'", html)
         self.assertIn("body: JSON.stringify({ alias: aliasName, model: modelId })", html)
-        self.assertIn("if (!aliasHasModel(aliasName, modelId))", html)
+        self.assertNotIn("if (!aliasHasModel(aliasName, modelId))", html)
         self.assertIn("const operation = aliasMutationQueue.then(async () =>", html)
         self.assertIn("aliasMutationQueue = operation.catch(() => {});", html)
         self.assertIn("加入中…", html)

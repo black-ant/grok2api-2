@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, RootModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel, RootModel, ValidationError as PydanticValidationError
 
 from app.control.account.backends.factory import get_repository_backend
 from app.control.account.commands import ListAccountsQuery
@@ -75,8 +75,8 @@ class ConfigPatchRequest(RootModel[dict[str, Any]]):
 
 
 class ModelMappingAppendRequest(BaseModel):
-    alias: str = Field(min_length=1)
-    model: str = Field(min_length=1)
+    alias: str
+    model: str
 
 
 _MODEL_MAPPING_MUTATION_LOCK = asyncio.Lock()
@@ -87,9 +87,9 @@ def _append_model_to_alias(
     alias_name: str,
     model_name: str,
 ) -> bool:
-    pool = aliases.get(alias_name)
+    pool = aliases.setdefault(alias_name, {"stable": [], "degraded": []})
     if not isinstance(pool, dict):
-        return False
+        pool = {"stable": [], "degraded": []}
     stable = list(pool.get("stable") or [])
     degraded = list(pool.get("degraded") or [])
     if model_name in stable or model_name in degraded:
@@ -499,8 +499,6 @@ async def append_model_mapping(req: ModelMappingAppendRequest):
     async with _MODEL_MAPPING_MUTATION_LOCK:
         await config.load()
         aliases = model_aliases.alias_config_map()
-        if alias_name not in aliases:
-            raise ValidationError("Unknown model alias", param="alias")
 
         before_aliases = _alias_pool_snapshot(aliases)
         added = _append_model_to_alias(aliases, alias_name, model_name)
@@ -510,25 +508,18 @@ async def append_model_mapping(req: ModelMappingAppendRequest):
         model_aliases.reset_runtime_state()
         saved_aliases = model_aliases.alias_config_map()
 
-    saved_pool = saved_aliases.get(alias_name, {})
-    saved_models = [
-        *(saved_pool.get("stable") or []),
-        *(saved_pool.get("degraded") or []),
-    ]
-    saved = model_name in saved_models
     logger.info(
-        "admin model mapping append: mutation_id={} alias={} model={} added={} saved={} before={} after={}",
+        "admin model mapping append: mutation_id={} alias={} model={} added={} before={} after={}",
         mutation_id,
         alias_name,
         model_name,
         added,
-        saved,
         before_aliases,
         _alias_pool_snapshot(saved_aliases),
     )
     return {
         "status": "success",
-        "added": added and saved,
+        "added": added,
         "mutation_id": mutation_id,
         "data": {"aliases": saved_aliases},
     }
