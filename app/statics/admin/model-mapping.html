@@ -39,16 +39,8 @@
     .btn-primary { height:36px; padding:0 15px; border-radius:11px; background:#111; color:#fff !important; -webkit-text-fill-color:#fff; border:1px solid #111; font-weight:750; box-shadow:0 8px 18px rgba(17,17,17,.08) }
     .btn-primary:hover:not(:disabled) { opacity:.9 }
     .btn-primary:disabled { opacity:.45; pointer-events:none }
-    .availability-modal { width:min(560px,94vw); padding:16px }
-    .availability-form { display:grid; gap:8px }
-    .availability-controls { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px }
-    .availability-controls select { width:100%; height:36px; min-width:0; border:1px solid #d8d2c7; border-radius:11px; background:#fff; padding:0 11px; font:inherit }
-    .availability-result { display:grid; gap:6px; margin-top:12px; padding:11px 12px; border:1px solid #e8e1d6; border-radius:12px; background:#fffdf9; color:#24201b; font-size:12px }
-    .availability-result.is-pass { border-color:#b7dfbd; background:#f2fbf3 }
-    .availability-result.is-fail { border-color:#f0c8a9; background:#fff7ef }
-    .availability-result-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-weight:800 }
-    .availability-result-status { font-size:13px }
-    .availability-result-meta { color:#766d60; overflow-wrap:anywhere }
+    .alias-actions { display:flex; align-items:center; gap:8px }
+    .alias-actions .btn-line { min-width:82px }
     .models-modal { width:min(900px,94vw); max-height:calc(100dvh - 32px); padding:16px; display:flex; flex-direction:column; overflow:hidden }
     .models-modal-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-shrink:0 }
     .models-modal-head .modal-title { margin-bottom:0 }
@@ -67,6 +59,21 @@
     .models-modal-degradation.is-cooling { background:#fff0df; color:#a45b13 }
     .models-modal-degradation.is-probe { background:#eee8ff; color:#6545a8 }
     .models-modal-degradation.is-ready { background:#fff8d8; color:#8b6b00 }
+    .free-check-modal { width:min(760px,94vw); max-height:calc(100dvh - 32px); padding:16px; display:flex; flex-direction:column; overflow:hidden }
+    .free-check-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-shrink:0 }
+    .free-check-head .modal-title { margin-bottom:0 }
+    .free-check-list { overflow-y:auto; min-height:120px; border:1px solid #e8e1d6; border-radius:12px; background:#fffdf9 }
+    .free-check-row { display:grid; grid-template-columns:minmax(0,1fr) 82px minmax(0,1.35fr) 88px; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid #f3ede3; font-size:13px }
+    .free-check-row:last-child { border-bottom:none }
+    .free-check-model { min-width:0; color:#181511; font-weight:750; overflow-wrap:anywhere }
+    .free-check-pool { display:inline-flex; align-items:center; justify-content:center; min-height:24px; padding:3px 8px; border-radius:999px; background:#f6f0e7; color:#5c5348; font-size:11px; font-weight:750 }
+    .free-check-result { min-width:0; color:#766d60; overflow-wrap:anywhere }
+    .free-check-status { display:inline-flex; align-items:center; min-height:24px; padding:0 8px; border-radius:999px; background:#f2ede4; color:#6b6256; font-size:11px; font-weight:800 }
+    .free-check-status.is-pass { background:#dcfce7; color:#15803d }
+    .free-check-status.is-fail { background:#ffedd5; color:#c2410c }
+    .free-check-status.is-running { background:#eee8ff; color:#6545a8 }
+    .free-check-message { margin-top:4px; font-size:12px; line-height:1.45; color:#4f473d }
+    .free-check-meta { margin-top:3px; font-size:11px; color:#9a8f81 }
     @media (max-width: 760px) {
       .page-hd { align-items:flex-start; flex-direction:column }
       .page-actions { width:100%; flex-wrap:wrap }
@@ -76,6 +83,9 @@
       .model-options { grid-template-columns:1fr }
       .models-modal-head-row, .models-modal-row { grid-template-columns:minmax(0,1fr) 62px 115px 132px }
       .models-modal-name-cell { display:none }
+      .free-check-row { grid-template-columns:minmax(0,1fr) 72px 84px }
+      .free-check-result { grid-column:1 / -1; grid-row:2; display:block }
+      .free-check-row > button { grid-column:3; grid-row:1 }
     }
   </style>
 </head>
@@ -89,7 +99,6 @@
       <span class="status">稳定 95% · 降级 5% 探测</span>
       <span class="status" id="status">加载中…</span>
       <button class="btn-line" id="models-btn" type="button">可用模型</button>
-      <button class="btn-line" id="availability-btn" type="button" disabled>模型是否可用</button>
       <button class="btn-line" id="reset-btn" type="button" disabled>重置</button>
       <button class="btn-line" id="restore-btn" type="button">恢复默认</button>
       <button class="btn-primary" id="save-btn" type="button" disabled>保存</button>
@@ -100,24 +109,6 @@
     <div class="mapping-form" id="mapping-form"></div>
   </section>
 </main>
-
-<div class="modal-overlay" id="availability-modal" aria-hidden="true">
-  <div class="modal availability-modal" role="dialog" aria-modal="true" aria-labelledby="availability-modal-title">
-    <div class="models-modal-head">
-      <div class="modal-title" id="availability-modal-title">模型是否可用</div>
-      <button type="button" class="btn btn-ghost btn-sm" data-availability-close>关闭</button>
-    </div>
-    <div class="availability-form">
-      <div class="availability-controls">
-        <select id="availability-model-select" aria-label="选择模型">
-          <option value="">选择模型</option>
-        </select>
-        <button class="btn-primary" id="availability-test-btn" type="button" disabled>测试</button>
-      </div>
-    </div>
-    <div class="availability-result" id="availability-result" hidden></div>
-  </div>
-</div>
 
 <div class="modal-overlay" id="models-modal" aria-hidden="true">
   <div class="modal models-modal" role="dialog" aria-modal="true" aria-labelledby="models-modal-title">
@@ -135,6 +126,16 @@
       </div>
       <div class="models-modal-list" id="models-modal-list"></div>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="free-check-modal" aria-hidden="true">
+  <div class="modal free-check-modal" role="dialog" aria-modal="true" aria-labelledby="free-check-modal-title">
+    <div class="free-check-head">
+      <div class="modal-title" id="free-check-modal-title">FREE 模型检测</div>
+      <button type="button" class="btn btn-ghost btn-sm" data-free-check-close>关闭</button>
+    </div>
+    <div class="free-check-list" id="free-check-list"></div>
   </div>
 </div>
 
@@ -157,7 +158,8 @@ let allModels = [];
 let savedAliases = {};
 let draftAliases = {};
 let modelsModalTimer = 0;
-let availabilityRunning = false;
+const freeCheckRunning = new Set();
+const freeCheckResults = new Map();
 
 function esc(value) {
   return String(value ?? '')
@@ -226,94 +228,114 @@ function setStatus(text) {
   document.getElementById('status').textContent = text;
 }
 
-function testableModels() {
-  return allModels.filter((item) => item.chat || item.console);
+function freeCheckModels() {
+  const freePool = normalizePool(draftAliases.FREE);
+  const seen = new Set();
+  const models = [];
+  POOLS.forEach((poolName) => {
+    uniqueModels(freePool[poolName]).forEach((modelId) => {
+      if (seen.has(modelId)) return;
+      seen.add(modelId);
+      const model = allModels.find((item) => item.id === modelId) || {};
+      models.push({ ...model, id: modelId, pool: poolName });
+    });
+  });
+  return models;
 }
 
-function syncAvailabilityControls() {
-  const select = document.getElementById('availability-model-select');
-  const testButton = document.getElementById('availability-test-btn');
-  const openButton = document.getElementById('availability-btn');
-  if (!select || !testButton || !openButton) return;
-  testButton.disabled = availabilityRunning || !select.value;
-  openButton.disabled = !testableModels().length;
-}
-
-function renderAvailabilityOptions() {
-  const select = document.getElementById('availability-model-select');
-  if (!select) return;
-  const current = select.value;
-  select.innerHTML = '<option value="">选择模型</option>'
-    + testableModels()
-      .map((item) => `<option value="${esc(item.id)}">${esc(item.id)} · ${esc(item.name || item.id)}</option>`)
-      .join('');
-  if (testableModels().some((item) => item.id === current)) select.value = current;
-  syncAvailabilityControls();
-}
-
-function closeAvailabilityModal() {
-  const modal = document.getElementById('availability-modal');
+function closeFreeCheckModal() {
+  const modal = document.getElementById('free-check-modal');
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
 }
 
-function openAvailabilityModal() {
-  renderAvailabilityOptions();
-  const modal = document.getElementById('availability-modal');
-  modal.classList.add('open');
-  modal.setAttribute('aria-hidden', 'false');
-  setTimeout(() => document.getElementById('availability-model-select')?.focus(), 0);
+function freeCheckResultView(result) {
+  if (!result) return { label: '未检测', className: '' };
+  if (result.status === 'available') return { label: '通过', className: 'is-pass' };
+  if (result.status === 'running') return { label: '检测中…', className: 'is-running' };
+  return { label: '失败', className: 'is-fail' };
 }
 
-function renderAvailabilityResult(report, error = null) {
-  const result = document.getElementById('availability-result');
-  if (!result) return;
-  if (error) {
-    result.className = 'availability-result is-fail';
-    result.innerHTML = `<div class="availability-result-head"><span class="availability-result-status">测试失败</span></div><div class="availability-result-meta">${esc(error.message || '请求失败')}</div>`;
-    result.hidden = false;
+function freeCheckMessage(result) {
+  if (!result) return '—';
+  if (result.status === 'running') return '发送消息中…';
+  return result.status === 'available'
+    ? (result.response_preview || '消息已返回')
+    : (result.message || result.body_preview || '未返回有效消息');
+}
+
+function freeCheckMeta(result) {
+  if (!result) return '';
+  return [
+    result.http_status ? `HTTP ${result.http_status}` : '',
+    result.duration_ms ? `${Math.round(Number(result.duration_ms))}ms` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function renderFreeCheckList() {
+  const list = document.getElementById('free-check-list');
+  if (!list) return;
+  const models = freeCheckModels();
+  if (!models.length) {
+    list.innerHTML = '<span class="muted" style="margin:12px">FREE 未配置模型</span>';
     return;
   }
-  const item = report?.results?.[0] || {};
-  const available = item.status === 'available';
-  const details = [
-    item.http_status ? `HTTP ${item.http_status}` : '',
-    item.duration_ms ? `${Math.round(Number(item.duration_ms))}ms` : '',
-  ].filter(Boolean).join(' · ');
-  const message = item.message || item.body_preview || item.response_preview || '—';
-  result.className = `availability-result ${available ? 'is-pass' : 'is-fail'}`;
-  result.innerHTML = `
-    <div class="availability-result-head">
-      <span class="availability-result-status">${available ? '可用' : '不可用'}</span>
-      <span>${esc(details || '无请求结果')}</span>
-    </div>
-    <div class="availability-result-meta">${esc(message)}</div>`;
-  result.hidden = false;
+  list.innerHTML = models.map((model) => {
+    const result = freeCheckRunning.has(model.id)
+      ? { status: 'running' }
+      : freeCheckResults.get(model.id);
+    const status = freeCheckResultView(result);
+    const actionLabel = freeCheckRunning.has(model.id) ? '检测中…' : result ? '重新检测' : '检测';
+    const meta = freeCheckMeta(result);
+    return `
+      <div class="free-check-row">
+        <span class="free-check-model" title="${esc(model.id)}">${esc(model.id)}</span>
+        <span class="free-check-pool">${model.pool === 'stable' ? '稳定池' : '降级池'}</span>
+        <div class="free-check-result">
+          <span class="free-check-status ${status.className}">${status.label}</span>
+          <div class="free-check-message">${esc(freeCheckMessage(result))}</div>
+          ${meta ? `<div class="free-check-meta">${esc(meta)}</div>` : ''}
+        </div>
+        <button class="btn-line" type="button" data-free-check-model="${esc(model.id)}" ${freeCheckRunning.has(model.id) ? 'disabled' : ''}>${actionLabel}</button>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('[data-free-check-model]').forEach((button) => {
+    button.addEventListener('click', () => checkFreeModel(button.dataset.freeCheckModel || ''));
+  });
 }
 
-async function testModelAvailability() {
-  const modelId = document.getElementById('availability-model-select')?.value || '';
-  if (!modelId || availabilityRunning) return;
-  const result = document.getElementById('availability-result');
-  availabilityRunning = true;
-  if (result) {
-    result.className = 'availability-result';
-    result.textContent = '测试中…';
-    result.hidden = false;
-  }
-  syncAvailabilityControls();
+function openFreeCheckModal() {
+  freeCheckResults.clear();
+  renderFreeCheckList();
+  const modal = document.getElementById('free-check-modal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => document.querySelector('[data-free-check-model]')?.focus(), 0);
+}
+
+async function checkFreeModel(modelId) {
+  if (!modelId || freeCheckRunning.has(modelId)) return;
+  freeCheckRunning.add(modelId);
+  freeCheckResults.delete(modelId);
+  renderFreeCheckList();
   try {
     const report = await apiFetch('/grok-capability/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelId, selection_mode: 'routing' }),
     });
-    renderAvailabilityResult(report);
+    freeCheckResults.set(modelId, report?.results?.[0] || {
+      status: 'failed',
+      message: '检测未返回结果',
+    });
   } catch (error) {
-    renderAvailabilityResult(null, error);
+    freeCheckResults.set(modelId, {
+      status: 'failed',
+      message: error.message || '请求失败',
+    });
   } finally {
-    availabilityRunning = false;
-    syncAvailabilityControls();
+    freeCheckRunning.delete(modelId);
+    renderFreeCheckList();
   }
 }
 
@@ -450,6 +472,7 @@ function renderAlias(aliasName) {
       <div class="model-picker">
         ${renderPool(aliasName, 'stable', '稳定池', '95% · 池内轮询')}
         ${renderPool(aliasName, 'degraded', '降级池', '5% · 成功后升级')}
+        ${aliasName === 'FREE' ? '<div class="alias-actions"><button class="btn-line" type="button" onclick="openFreeCheckModal()">检测</button></div>' : ''}
       </div>
     </div>`;
 }
@@ -466,7 +489,6 @@ async function loadMapping() {
   savedAliases = normalizeAliases(payload?.data?.aliases);
   draftAliases = normalizeAliases(savedAliases);
   render();
-  syncAvailabilityControls();
 }
 
 async function saveMapping() {
@@ -524,20 +546,17 @@ function waitI18n() {
     window.showToast?.(`恢复默认失败: ${error.message}`, 'error');
   }));
   document.getElementById('models-btn').addEventListener('click', openModelsModal);
-  document.getElementById('availability-btn').addEventListener('click', openAvailabilityModal);
-  document.getElementById('availability-model-select').addEventListener('change', syncAvailabilityControls);
-  document.getElementById('availability-test-btn').addEventListener('click', () => testModelAvailability().catch((error) => renderAvailabilityResult(null, error)));
-  document.querySelectorAll('[data-availability-close]').forEach((node) => node.addEventListener('click', closeAvailabilityModal));
-  document.getElementById('availability-modal').addEventListener('click', (event) => {
-    if (event.target === event.currentTarget) closeAvailabilityModal();
-  });
   document.querySelectorAll('[data-models-close]').forEach((node) => node.addEventListener('click', closeModelsModal));
   document.getElementById('models-modal').addEventListener('click', (event) => {
     if (event.target === event.currentTarget) closeModelsModal();
   });
+  document.querySelectorAll('[data-free-check-close]').forEach((node) => node.addEventListener('click', closeFreeCheckModal));
+  document.getElementById('free-check-modal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeFreeCheckModal();
+  });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeAvailabilityModal();
     if (event.key === 'Escape') closeModelsModal();
+    if (event.key === 'Escape') closeFreeCheckModal();
   });
   try {
     await loadMapping();

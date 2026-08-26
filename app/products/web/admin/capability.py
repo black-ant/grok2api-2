@@ -411,6 +411,8 @@ async def scan_capabilities(
                     question,
                     mode_id=selected_mode_id,
                 )
+            if not text.strip():
+                raise UpstreamError("模型未返回消息", status=502)
             success = True
             results.append(
                 {
