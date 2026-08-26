@@ -65,9 +65,9 @@ video_format = "grok_url"
 # ==================== 模型映射 ====================
 [models.aliases]
 # 客户端只需要配置这两个虚拟模型名。稳定池内轮询，降级池按 5% 低频探测。
-# 降级池模型调用成功后自动回到稳定池；稳定池模型触发限流后自动进入降级池。
-FREE = { stable = ["grok-4.3-console"], degraded = ["grok-4.20-0309-console"], stable_ratio = 95, degraded_ratio = 5 }
-SUPER = { stable = ["grok-4.20-auto"], degraded = ["grok-4.3-beta"], stable_ratio = 95, degraded_ratio = 5 }
+# 降级池模型调用成功，或停留超过 auto_promote_after_sec 后自动回到稳定池；稳定池模型触发限流后自动进入降级池。
+FREE = { stable = ["grok-4.3-console"], degraded = ["grok-4.20-0309-console"], stable_ratio = 95, degraded_ratio = 5, auto_promote_after_sec = 28800 }
+SUPER = { stable = ["grok-4.20-auto"], degraded = ["grok-4.3-beta"], stable_ratio = 95, degraded_ratio = 5, auto_promote_after_sec = 28800 }
 
 
 # ==================== 本地缓存 ====================

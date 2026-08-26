@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import gcd
 from threading import RLock
-from time import time
+from time import monotonic, time
 from typing import Any, Iterable
 
 from app.platform.config.snapshot import get_config
@@ -16,6 +16,7 @@ from .spec import ModelSpec
 
 DEFAULT_STABLE_RATIO = 95
 DEFAULT_DEGRADED_RATIO = 5
+DEFAULT_AUTO_PROMOTE_AFTER_SEC = 8 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class ModelPoolConfig:
     degraded: tuple[str, ...]
     stable_ratio: int = DEFAULT_STABLE_RATIO
     degraded_ratio: int = DEFAULT_DEGRADED_RATIO
+    auto_promote_after_sec: int = DEFAULT_AUTO_PROMOTE_AFTER_SEC
 
     @property
     def candidates(self) -> tuple[str, ...]:
@@ -35,6 +37,7 @@ class ModelPoolConfig:
             "degraded": list(self.degraded),
             "stable_ratio": self.stable_ratio,
             "degraded_ratio": self.degraded_ratio,
+            "auto_promote_after_sec": self.auto_promote_after_sec,
         }
 
 
@@ -81,6 +84,7 @@ class _AliasRuntime:
     degraded_requests: int = 0
     model_requests: dict[str, int] = field(default_factory=dict)
     model_last_used_at: dict[str, float] = field(default_factory=dict)
+    degraded_since: dict[str, float] = field(default_factory=dict)
     recent_routes: list[dict[str, Any]] = field(default_factory=list)
     pool_event_count: int = 0
     pool_events: list[dict[str, Any]] = field(default_factory=list)
@@ -117,6 +121,13 @@ def _ratio(value: object, default: int) -> int:
         return default
 
 
+def _duration_seconds(value: object, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_pool(value: object) -> ModelPoolConfig:
     if isinstance(value, dict):
         stable = _unique(_as_model_list(value.get("stable")))
@@ -125,6 +136,9 @@ def _parse_pool(value: object) -> ModelPoolConfig:
         )
         stable_ratio = _ratio(value.get("stable_ratio"), DEFAULT_STABLE_RATIO)
         degraded_ratio = _ratio(value.get("degraded_ratio"), DEFAULT_DEGRADED_RATIO)
+        auto_promote_after_sec = _duration_seconds(
+            value.get("auto_promote_after_sec"), DEFAULT_AUTO_PROMOTE_AFTER_SEC
+        )
     else:
         # Backward compatibility: the old ordered array is treated as a stable
         # pool. Runtime 429 state can still move individual models to degraded.
@@ -132,6 +146,7 @@ def _parse_pool(value: object) -> ModelPoolConfig:
         degraded = ()
         stable_ratio = DEFAULT_STABLE_RATIO
         degraded_ratio = DEFAULT_DEGRADED_RATIO
+        auto_promote_after_sec = DEFAULT_AUTO_PROMOTE_AFTER_SEC
 
     if stable_ratio + degraded_ratio <= 0:
         stable_ratio = DEFAULT_STABLE_RATIO
@@ -142,6 +157,7 @@ def _parse_pool(value: object) -> ModelPoolConfig:
         degraded=degraded,
         stable_ratio=stable_ratio,
         degraded_ratio=degraded_ratio,
+        auto_promote_after_sec=auto_promote_after_sec,
     )
 
 
@@ -166,6 +182,7 @@ def _sanitize_pool(alias_name: str, config: ModelPoolConfig) -> ModelPoolConfig:
         degraded=degraded,
         stable_ratio=config.stable_ratio,
         degraded_ratio=config.degraded_ratio,
+        auto_promote_after_sec=config.auto_promote_after_sec,
     )
 
 
@@ -253,10 +270,12 @@ def _runtime_for(alias_name: str, config: ModelPoolConfig) -> _AliasRuntime:
         config.degraded,
         config.stable_ratio,
         config.degraded_ratio,
+        config.auto_promote_after_sec,
     )
     runtime = _RUNTIMES.get(alias_name)
     if runtime is None or runtime.signature != signature:
         runtime = _AliasRuntime(signature=signature)
+        runtime.degraded_since = dict.fromkeys(config.degraded, monotonic())
         _RUNTIMES[alias_name] = runtime
     return runtime
 
@@ -390,20 +409,70 @@ def _record_pool_event(
     action: str,
     from_pool: str,
     to_pool: str,
+    reason: str | None = None,
 ) -> None:
     runtime.pool_event_count += 1
-    runtime.pool_events.append(
-        {
-            "sequence": runtime.pool_event_count,
-            "model": model_name,
-            "action": action,
-            "from_pool": from_pool,
-            "to_pool": to_pool,
-            "at": time(),
-        }
-    )
+    event = {
+        "sequence": runtime.pool_event_count,
+        "model": model_name,
+        "action": action,
+        "from_pool": from_pool,
+        "to_pool": to_pool,
+        "at": time(),
+    }
+    if reason:
+        event["reason"] = reason
+    runtime.pool_events.append(event)
     if len(runtime.pool_events) > _MAX_POOL_EVENTS:
         del runtime.pool_events[:-_MAX_POOL_EVENTS]
+
+
+def _promote_runtime_model(
+    runtime: _AliasRuntime,
+    config: ModelPoolConfig,
+    model_name: str,
+    *,
+    reason: str,
+) -> bool:
+    was_demoted = model_name in runtime.demoted
+    was_promoted = model_name in runtime.promoted
+    if not was_demoted and model_name not in config.degraded:
+        return False
+    if was_demoted:
+        runtime.demoted.discard(model_name)
+    if model_name in config.degraded and not was_promoted:
+        runtime.promoted.add(model_name)
+    if not was_demoted and (model_name not in config.degraded or was_promoted):
+        return False
+    runtime.degraded_since.pop(model_name, None)
+    _record_pool_event(
+        runtime,
+        model_name=model_name,
+        action="promote",
+        from_pool="degraded",
+        to_pool="stable",
+        reason=reason,
+    )
+    return True
+
+
+def _promote_expired_models(
+    config: ModelPoolConfig,
+    runtime: _AliasRuntime,
+) -> None:
+    threshold = config.auto_promote_after_sec
+    if threshold <= 0:
+        return
+    now = monotonic()
+    _, degraded = _effective_pools(config, runtime)
+    for model_name in degraded:
+        degraded_since = runtime.degraded_since.get(model_name)
+        if degraded_since is None:
+            runtime.degraded_since[model_name] = now
+            continue
+        if now - degraded_since < threshold:
+            continue
+        _promote_runtime_model(runtime, config, model_name, reason="time")
 
 
 def _select_virtual_candidate(
@@ -417,6 +486,7 @@ def _select_virtual_candidate(
 ) -> tuple[str, ModelSpec, tuple[str, ...], str, tuple[tuple[str, str], ...]] | None:
     with _ROUTING_LOCK:
         runtime = _runtime_for(alias_name, config)
+        _promote_expired_models(config, runtime)
         stable, degraded = _effective_pools(config, runtime)
         stable_weight, degraded_weight = _routing_weights(config)
         total_weight = stable_weight + degraded_weight
@@ -610,22 +680,7 @@ def promote_model(model_name: str) -> None:
     with _ROUTING_LOCK:
         for alias_name, config in configs.items():
             runtime = _runtime_for(alias_name, config)
-            if name not in config.degraded and name not in runtime.demoted:
-                continue
-            was_demoted = name in runtime.demoted
-            was_promoted = name in runtime.promoted
-            if was_demoted:
-                runtime.demoted.discard(name)
-            if name in config.degraded and not was_promoted:
-                runtime.promoted.add(name)
-            if was_demoted or (name in config.degraded and not was_promoted):
-                _record_pool_event(
-                    runtime,
-                    model_name=name,
-                    action="promote",
-                    from_pool="degraded",
-                    to_pool="stable",
-                )
+            _promote_runtime_model(runtime, config, name, reason="success")
 
 
 def demote_model(model_name: str) -> None:
@@ -646,13 +701,16 @@ def demote_model(model_name: str) -> None:
                 runtime.promoted.discard(name)
             if name in config.stable and not was_demoted:
                 runtime.demoted.add(name)
-            if was_promoted or (name in config.stable and not was_demoted):
+            changed = was_promoted or (name in config.stable and not was_demoted)
+            if changed:
+                runtime.degraded_since.setdefault(name, monotonic())
                 _record_pool_event(
                     runtime,
                     model_name=name,
                     action="demote",
                     from_pool="stable",
                     to_pool="degraded",
+                    reason="rate_limit",
                 )
 
 
@@ -669,6 +727,7 @@ def routing_snapshot() -> dict[str, Any]:
     with _ROUTING_LOCK:
         for alias_name, config in configs.items():
             runtime = _runtime_for(alias_name, config)
+            _promote_expired_models(config, runtime)
             stable, degraded = _effective_pools(config, runtime)
             total = runtime.selection_count
             ratio_total = config.stable_ratio + config.degraded_ratio
@@ -691,6 +750,18 @@ def routing_snapshot() -> dict[str, Any]:
             models = []
             for model in model_ids:
                 requests = runtime.model_requests.get(model, 0)
+                auto_promote_remaining_sec = None
+                if model_pool[model] == "degraded" and config.auto_promote_after_sec > 0:
+                    degraded_since = runtime.degraded_since.get(model)
+                    if degraded_since is not None:
+                        auto_promote_remaining_sec = round(
+                            max(
+                                0.0,
+                                config.auto_promote_after_sec
+                                - (monotonic() - degraded_since),
+                            ),
+                            1,
+                        )
                 models.append(
                     {
                         "id": model,
@@ -698,6 +769,7 @@ def routing_snapshot() -> dict[str, Any]:
                         "requests": requests,
                         "share": round(requests * 100 / total, 1) if total else 0,
                         "last_used_at": runtime.model_last_used_at.get(model),
+                        "auto_promote_remaining_sec": auto_promote_remaining_sec,
                     }
                 )
             aliases.append(
@@ -708,6 +780,7 @@ def routing_snapshot() -> dict[str, Any]:
                         "degraded": degraded_target,
                     },
                     "configured": config.as_dict(),
+                    "auto_promote_after_sec": config.auto_promote_after_sec,
                     "effective": {
                         "stable": list(stable),
                         "degraded": list(degraded),
@@ -739,6 +812,7 @@ def routing_snapshot() -> dict[str, Any]:
 __all__ = [
     "DEFAULT_ALIAS_CONFIG",
     "DEFAULT_DEGRADED_RATIO",
+    "DEFAULT_AUTO_PROMOTE_AFTER_SEC",
     "DEFAULT_STABLE_RATIO",
     "ModelPoolConfig",
     "ModelResolution",

@@ -404,6 +404,7 @@ function normalizeAliases(value) {
       degraded: [...new Set((Array.isArray(entry.degraded) ? entry.degraded : []).map((item) => String(item || '').trim()).filter((item) => item && !stable.includes(item)))],
       stable_ratio: Number.isFinite(Number(entry.stable_ratio)) ? Number(entry.stable_ratio) : 95,
       degraded_ratio: Number.isFinite(Number(entry.degraded_ratio)) ? Number(entry.degraded_ratio) : 5,
+      auto_promote_after_sec: Number.isFinite(Number(entry.auto_promote_after_sec)) ? Math.max(0, Number(entry.auto_promote_after_sec)) : 8 * 60 * 60,
     };
   });
   return result;

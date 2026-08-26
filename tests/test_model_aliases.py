@@ -277,6 +277,62 @@ class ModelAliasesTests(unittest.TestCase):
         self.assertEqual(second_after_promotion.model, "grok-4.3-medium")
         self.assertEqual(second_after_promotion.pool, "stable")
 
+    def test_degraded_model_is_promoted_after_configured_time(self):
+        config = {
+            "FREE": {
+                "stable": [],
+                "degraded": ["grok-4.3-medium"],
+                "auto_promote_after_sec": 100,
+            }
+        }
+        clock = [0.0]
+        with (
+            patch.object(aliases, "get_config", return_value=config),
+            patch.object(aliases, "monotonic", side_effect=lambda: clock[0]),
+        ):
+            initial = aliases.resolve("FREE")
+            clock[0] = 100.0
+            promoted = aliases.resolve("FREE")
+            snapshot = aliases.routing_snapshot()
+
+        self.assertIsNotNone(initial)
+        self.assertEqual(initial.pool, "degraded")
+        self.assertIsNotNone(promoted)
+        self.assertEqual(promoted.model, "grok-4.3-medium")
+        self.assertEqual(promoted.pool, "stable")
+        self.assertEqual(snapshot["aliases"][0]["effective"]["stable"], ["grok-4.3-medium"])
+        self.assertEqual(snapshot["aliases"][0]["pool_events"][0]["reason"], "time")
+
+    def test_rate_limited_model_is_promoted_after_configured_time(self):
+        config = {
+            "FREE": {
+                "stable": ["grok-4.3-console"],
+                "degraded": [],
+                "auto_promote_after_sec": 100,
+            }
+        }
+        clock = [0.0]
+        with (
+            patch.object(aliases, "get_config", return_value=config),
+            patch.object(aliases, "monotonic", side_effect=lambda: clock[0]),
+        ):
+            initial = aliases.resolve("FREE")
+            aliases.demote_model("grok-4.3-console")
+            clock[0] = 100.0
+            promoted = aliases.resolve("FREE")
+
+        self.assertIsNotNone(initial)
+        self.assertEqual(initial.model, "grok-4.3-console")
+        self.assertEqual(initial.pool, "stable")
+        self.assertIsNotNone(promoted)
+        self.assertEqual(promoted.model, "grok-4.3-console")
+        self.assertEqual(promoted.pool, "stable")
+
+    def test_auto_promote_duration_defaults_to_eight_hours(self):
+        parsed = aliases._parse_pool({"stable": [], "degraded": []})
+
+        self.assertEqual(parsed.auto_promote_after_sec, 8 * 60 * 60)
+
     def test_rate_limited_promoted_model_returns_to_degraded_pool(self):
         config = {
             "FREE": {
