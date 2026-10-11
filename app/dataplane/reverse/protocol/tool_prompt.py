@@ -108,6 +108,36 @@ def tool_calls_to_xml(tool_calls: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def normalize_tool_parameters(parameters: Any) -> Any:
+    """Remove known non-object branches from a root tool-parameter union.
+
+    Tool-call arguments are always represented as a JSON object.  Some
+    clients wrap an object schema in a root ``anyOf``/``oneOf`` that also
+    contains ``null`` or scalar branches.  Some upstream grammars reject
+    those branches, while nested unions remain valid and must not be changed.
+    If a union has no recognizable object branch, the original schema is
+    preserved rather than guessed into a different contract.
+    """
+    if not isinstance(parameters, dict):
+        return parameters
+
+    normalized = dict(parameters)
+    changed = False
+    for keyword in ("anyOf", "oneOf"):
+        branches = normalized.get(keyword)
+        if not isinstance(branches, list) or not branches:
+            continue
+
+        object_branches = [
+            branch for branch in branches if _is_object_root_schema(branch)
+        ]
+        if object_branches and len(object_branches) != len(branches):
+            normalized[keyword] = object_branches
+            changed = True
+
+    return normalized if changed else parameters
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
@@ -119,18 +149,40 @@ def _format_tool_definitions(tools: list[dict[str, Any]]) -> str:
         name = func.get("name", "").strip()
         desc = (func.get("description") or "").strip()
         params = func.get("parameters")
+        normalized_params = normalize_tool_parameters(params)
 
         lines: list[str] = []
         lines.append(f"Tool: {name}")
         if desc:
             lines.append(f"Description: {desc}")
-        if params:
+        if normalized_params:
             try:
-                lines.append(f"Parameters: {json.dumps(params, ensure_ascii=False)}")
+                lines.append(
+                    "Parameters: "
+                    + json.dumps(normalized_params, ensure_ascii=False)
+                )
             except (TypeError, ValueError):
-                lines.append(f"Parameters: {params}")
+                lines.append(f"Parameters: {normalized_params}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def _is_object_root_schema(schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return False
+
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        return True
+    if isinstance(schema_type, list) and "object" in schema_type:
+        return True
+    if isinstance(schema.get("properties"), dict):
+        return True
+    if "$ref" in schema:
+        return True
+    return "type" not in schema and any(
+        key in schema for key in ("additionalProperties", "required")
+    )
 
 
 def _build_choice_instruction(
