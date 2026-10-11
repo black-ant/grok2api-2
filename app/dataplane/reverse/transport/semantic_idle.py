@@ -86,13 +86,17 @@ async def with_semantic_idle_timeout(
                 await _close_iterator_safely(iterator)
                 raise StreamIdleTimeout(timeout_s) from exc
 
+            yielded_at = loop.time()
             yield item
+            paused_duration = loop.time() - yielded_at
             try:
                 active = is_activity(item)
             except Exception:
                 active = False
             if active:
                 deadline = loop.time() + timeout_s
+            else:
+                deadline += max(0.0, paused_duration)
     except asyncio.CancelledError:
         await _close_iterator_safely(iterator)
         raise

@@ -37,6 +37,22 @@ class SemanticIdleTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(items), 2)
 
+    async def test_downstream_pause_does_not_consume_semantic_idle_budget(self):
+        async def source():
+            yield 'data: {result:{response:{messageTag:control}}}'
+            await asyncio.sleep(0.01)
+            yield 'data: {result:{response:{token:after-pause}}}'
+
+        items = []
+        async for item in with_semantic_idle_timeout(
+            source(), 0.03, is_chat_stream_activity
+        ):
+            items.append(item)
+            if len(items) == 1:
+                await asyncio.sleep(0.06)
+
+        self.assertEqual(len(items), 2)
+
     async def test_console_generated_events_reset_deadline(self):
         async def source():
             yield (
