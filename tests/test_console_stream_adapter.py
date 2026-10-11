@@ -49,10 +49,19 @@ class ConsoleStreamAdapterTests(unittest.TestCase):
         adapter = ConsoleStreamAdapter()
 
         adapter.feed(
+            "response.output_item.added",
+            '{"item":{"id":"msg_1","type":"message","content":[]}}',
+        )
+        adapter.feed(
+            "response.content_part.added",
+            '{"part":{"type":"output_text","text":""}}',
+        )
+        adapter.feed(
             "response.completed",
             '{"response":{"usage":{"input_tokens":1,"output_tokens":0}}}',
         )
 
+        self.assertEqual(adapter.output_item_types, frozenset())
         self.assertFalse(adapter.has_non_text_output)
         self.assertTrue(adapter.is_empty_response)
 

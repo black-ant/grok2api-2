@@ -110,6 +110,7 @@ async def create(
     if stream:
         async def _run_stream() -> AsyncGenerator[str, None]:
             excluded: list[str] = []
+            prefix_emitted = False
             for attempt in range(max_retries + 1):
                 acct, selected_mode_id = await reserve_account(
                     directory, spec, now_s_override=now_s(),
@@ -136,39 +137,41 @@ async def create(
                     )
 
                     try:
-                        # response.created
-                        yield format_sse("response.created", {
-                            "type": "response.created",
-                            "response": make_resp_object(response_id, model, "in_progress", []),
-                        })
+                        if not prefix_emitted:
+                            # response.created
+                            yield format_sse("response.created", {
+                                "type": "response.created",
+                                "response": make_resp_object(response_id, model, "in_progress", []),
+                            })
 
-                        # response.in_progress
-                        yield format_sse("response.in_progress", {
-                            "type": "response.in_progress",
-                            "response": make_resp_object(response_id, model, "in_progress", []),
-                        })
+                            # response.in_progress
+                            yield format_sse("response.in_progress", {
+                                "type": "response.in_progress",
+                                "response": make_resp_object(response_id, model, "in_progress", []),
+                            })
 
-                        # output_item.added (message)
-                        yield format_sse("response.output_item.added", {
-                            "type": "response.output_item.added",
-                            "output_index": 0,
-                            "item": {
-                                "id": message_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "status": "in_progress",
-                                "content": [],
-                            },
-                        })
+                            # output_item.added (message)
+                            yield format_sse("response.output_item.added", {
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "id": message_id,
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "status": "in_progress",
+                                    "content": [],
+                                },
+                            })
 
-                        # content_part.added
-                        yield format_sse("response.content_part.added", {
-                            "type": "response.content_part.added",
-                            "item_id": message_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                            "part": {"type": "output_text", "text": "", "annotations": []},
-                        })
+                            # content_part.added
+                            yield format_sse("response.content_part.added", {
+                                "type": "response.content_part.added",
+                                "item_id": message_id,
+                                "output_index": 0,
+                                "content_index": 0,
+                                "part": {"type": "output_text", "text": "", "annotations": []},
+                            })
+                            prefix_emitted = True
 
                         event_count = 0
                         yield ": heartbeat\n\n"
@@ -262,7 +265,11 @@ async def create(
 
                     except UpstreamError as exc:
                         fail_exc = exc
-                        if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
+                        if (
+                            _should_retry_upstream(exc, retry_codes)
+                            and attempt < max_retries
+                            and not text_buf
+                        ):
                             _retry = True
                             logger.warning(
                                 "console responses retry: attempt={}/{} status={}",

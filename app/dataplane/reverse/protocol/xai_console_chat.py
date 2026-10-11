@@ -47,6 +47,10 @@ from app.dataplane.reverse.transport.semantic_idle import (
 )
 
 
+_LIFECYCLE_OUTPUT_ITEM_TYPES = frozenset({"message"})
+_LIFECYCLE_CONTENT_PART_TYPES = frozenset({"output_text"})
+
+
 # ---------------------------------------------------------------------------
 # 支持的模型名 → console.x.ai 实际 model 字段映射
 # ---------------------------------------------------------------------------
@@ -296,7 +300,7 @@ class ConsoleStreamAdapter:
             item = obj.get("item")
             if isinstance(item, dict):
                 item_type = str(item.get("type") or "").strip()
-                if item_type:
+                if item_type and item_type not in _LIFECYCLE_OUTPUT_ITEM_TYPES:
                     self._output_item_types.add(item_type)
 
         elif event_type in {
@@ -306,7 +310,7 @@ class ConsoleStreamAdapter:
             part = obj.get("part")
             if isinstance(part, dict):
                 part_type = str(part.get("type") or "").strip()
-                if part_type:
+                if part_type and part_type not in _LIFECYCLE_CONTENT_PART_TYPES:
                     self._output_item_types.add(part_type)
 
         elif event_type.startswith("response.reasoning") or event_type.startswith(
@@ -317,6 +321,11 @@ class ConsoleStreamAdapter:
                 "response.web_search_call",
                 "response.x_search_call",
                 "response.image_generation_call",
+                "response.code_interpreter_call",
+                "response.computer_call",
+                "response.output_audio",
+                "response.refusal",
+                "response.shell_call",
                 "response.mcp_",
             )
         ):

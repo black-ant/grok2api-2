@@ -104,6 +104,7 @@ async def create(
     if stream:
         async def _run_stream() -> AsyncGenerator[str, None]:
             excluded: list[str] = []
+            prefix_emitted = False
             for attempt in range(max_retries + 1):
                 acct, selected_mode_id = await reserve_account(
                     directory, spec, now_s_override=now_s(),
@@ -130,27 +131,29 @@ async def create(
                     )
 
                     try:
-                        # message_start
-                        yield _sse("message_start", {
-                            "type": "message_start",
-                            "message": {
-                                "id": msg_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "model": model,
-                                "content": [],
-                                "stop_reason": None,
-                                "usage": {"input_tokens": estimate_prompt_tokens(messages), "output_tokens": 0},
-                            },
-                        })
-                        yield _sse("ping", {"type": "ping"})
+                        if not prefix_emitted:
+                            # message_start
+                            yield _sse("message_start", {
+                                "type": "message_start",
+                                "message": {
+                                    "id": msg_id,
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "model": model,
+                                    "content": [],
+                                    "stop_reason": None,
+                                    "usage": {"input_tokens": estimate_prompt_tokens(messages), "output_tokens": 0},
+                                },
+                            })
+                            yield _sse("ping", {"type": "ping"})
 
-                        # content_block_start
-                        yield _sse("content_block_start", {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {"type": "text", "text": ""},
-                        })
+                            # content_block_start
+                            yield _sse("content_block_start", {
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": {"type": "text", "text": ""},
+                            })
+                            prefix_emitted = True
 
                         yield ": heartbeat\n\n"
                         async for event_type, data in stream_console_chat(
@@ -203,7 +206,11 @@ async def create(
                                 retry_after_sec=getattr(exc, "retry_after_s", None),
                                 jitter_ratio=jitter_ratio(cfg),
                             )
-                        if _should_retry_upstream(exc, retry_codes) and attempt < max_retries:
+                        if (
+                            _should_retry_upstream(exc, retry_codes)
+                            and attempt < max_retries
+                            and not text_buf
+                        ):
                             _retry = True
                             logger.warning(
                                 "console messages retry: attempt={}/{} status={}",
