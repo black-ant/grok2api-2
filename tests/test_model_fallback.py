@@ -323,6 +323,49 @@ class ConsoleModelFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(received), 1)
         self.assertNotIn("model_fallbacks", routing)
 
+    async def test_console_stream_retries_pure_empty_response(self):
+        model = "grok-4.20-0309-reasoning-console"
+        accounts = iter([
+            SimpleNamespace(token="token-1", pool_id=0),
+            SimpleNamespace(token="token-2", pool_id=0),
+        ])
+        calls = []
+
+        async def fake_stream(token, payload, timeout_s):
+            calls.append((token, payload["model"]))
+            if token == "token-1":
+                yield "response.completed", '{"response":{"usage":{"output_tokens":0}}}'
+                return
+            yield "response.output_text.delta", '{"delta":"ok"}'
+            yield "response.completed", '{"response":{"usage":{"output_tokens":1}}}'
+
+        async def fake_reserve(*_args, **_kwargs):
+            return next(accounts), 5
+
+        directory = SimpleNamespace(
+            release=AsyncMock(),
+            feedback=AsyncMock(),
+        )
+
+        with patch.object(console_chat, "get_config", return_value=_Config(limit=0, retry_codes="")), patch.object(
+            console_chat, "selection_max_retries", return_value=1
+        ), patch.object(
+            console_chat, "reserve_account", new=AsyncMock(side_effect=fake_reserve)
+        ), patch.object(
+            console_chat, "stream_console_chat", new=fake_stream
+        ), patch(
+            "app.dataplane.account._directory", directory
+        ):
+            result = await console_chat.completions(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+            chunks = [chunk async for chunk in result]
+
+        self.assertEqual(calls, [("token-1", "grok-4.20-0309-reasoning"), ("token-2", "grok-4.20-0309-reasoning")])
+        self.assertTrue(any('"content":"ok"' in chunk for chunk in chunks))
+
     async def test_console_stream_recovers_model_after_cooldown(self):
         first_model = "grok-4.20-0309-reasoning-console"
         fallback_model = "grok-4.20-0309-non-reasoning-console"
