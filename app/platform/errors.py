@@ -116,8 +116,17 @@ class StreamIdleTimeout(UpstreamError):
         self.code = "stream_idle_timeout"
 
 
+class UpstreamResponseEmptyError(UpstreamError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Upstream returned no visible or non-text output",
+            status=502,
+        )
+        self.code = "upstream_response_empty"
+
+
 __all__ = [
     "ErrorKind", "AppError", "parse_retry_after",
     "ValidationError", "AuthError", "RateLimitError",
-    "UpstreamError", "StreamIdleTimeout",
+    "UpstreamError", "StreamIdleTimeout", "UpstreamResponseEmptyError",
 ]

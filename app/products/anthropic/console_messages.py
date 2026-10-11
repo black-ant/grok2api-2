@@ -22,6 +22,7 @@ from app.dataplane.account.selector import current_strategy
 from app.dataplane.reverse.protocol.xai_console_chat import (
     build_console_payload,
     ConsoleStreamAdapter,
+    raise_if_empty_console_response,
     stream_console_chat,
 )
 from app.products._account_selection import reserve_account, selection_max_retries
@@ -164,6 +165,7 @@ async def create(
                                     "delta": {"type": "text_delta", "text": tok},
                                 })
 
+                        raise_if_empty_console_response(adapter)
                         # content_block_stop
                         yield _sse("content_block_stop", {
                             "type": "content_block_stop",
@@ -271,6 +273,7 @@ async def create(
                 ):
                     adapter.feed(event_type, data)
 
+                raise_if_empty_console_response(adapter)
                 full_text = adapter.full_text
                 usage_data = adapter.usage
                 input_tokens = (

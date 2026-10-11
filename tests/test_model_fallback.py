@@ -239,8 +239,8 @@ class ConsoleModelFallbackTests(unittest.IsolatedAsyncioTestCase):
             calls.append((token, payload["model"]))
             if payload["model"] == first_payload_model:
                 raise UpstreamError("rate limited", status=429)
-            if False:
-                yield "unused"
+            yield "response.output_text.delta", '{"delta":"ok"}'
+            yield "response.completed", '{"response":{"usage":{"output_tokens":1}}}'
 
         async def fake_reserve(*_args, **_kwargs):
             return next(accounts), 5

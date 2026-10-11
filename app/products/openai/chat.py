@@ -204,7 +204,11 @@ def _configured_retry_codes(cfg) -> frozenset[int]:
 
 def _should_retry_upstream(exc: UpstreamError, retry_codes: frozenset[int]) -> bool:
     """Return whether this upstream error should switch to another token."""
-    return exc.status in retry_codes or is_invalid_credentials_error(exc)
+    return (
+        exc.code == "upstream_response_empty"
+        or exc.status in retry_codes
+        or is_invalid_credentials_error(exc)
+    )
 
 
 def _feedback_kind(exc: BaseException) -> "FeedbackKind":

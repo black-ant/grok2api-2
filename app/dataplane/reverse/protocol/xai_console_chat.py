@@ -33,7 +33,12 @@ from typing import Any, AsyncGenerator
 import orjson
 
 from app.control.proxy.models import ProxyLease
-from app.platform.errors import StreamIdleTimeout, UpstreamError, parse_retry_after
+from app.platform.errors import (
+    StreamIdleTimeout,
+    UpstreamError,
+    UpstreamResponseEmptyError,
+    parse_retry_after,
+)
 from app.platform.config.snapshot import get_config
 from app.platform.logging.logger import logger
 from app.dataplane.reverse.transport.semantic_idle import (
@@ -345,6 +350,11 @@ class ConsoleStreamAdapter:
         return not self.full_text and not self.has_non_text_output
 
 
+def raise_if_empty_console_response(adapter: ConsoleStreamAdapter) -> None:
+    if adapter.is_empty_response:
+        raise UpstreamResponseEmptyError()
+
+
 def classify_console_line(line: str) -> tuple[str, str]:
     """Parse a raw SSE line into (event_type, data).
 
@@ -481,6 +491,7 @@ __all__ = [
     "CONSOLE_MODELS",
     "build_console_payload",
     "ConsoleStreamAdapter",
+    "raise_if_empty_console_response",
     "classify_console_line",
     "stream_console_chat",
 ]

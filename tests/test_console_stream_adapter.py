@@ -1,6 +1,10 @@
 import unittest
 
-from app.dataplane.reverse.protocol.xai_console_chat import ConsoleStreamAdapter
+from app.dataplane.reverse.protocol.xai_console_chat import (
+    ConsoleStreamAdapter,
+    raise_if_empty_console_response,
+)
+from app.platform.errors import UpstreamResponseEmptyError
 
 
 class ConsoleStreamAdapterTests(unittest.TestCase):
@@ -51,6 +55,9 @@ class ConsoleStreamAdapterTests(unittest.TestCase):
 
         self.assertFalse(adapter.has_non_text_output)
         self.assertTrue(adapter.is_empty_response)
+
+        with self.assertRaises(UpstreamResponseEmptyError):
+            raise_if_empty_console_response(adapter)
 
 
 if __name__ == "__main__":
