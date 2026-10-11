@@ -249,16 +249,24 @@ def build_console_payload(
 class ConsoleStreamAdapter:
     """Parse console.x.ai SSE events and yield text tokens.
 
-    只关心 response.output_text.delta 事件，其余忽略。
-    response.completed 事件用于提取 usage 统计。
+    文本事件直接转发；工具、推理和媒体事件只记录为上游活动，避免
+    后续把“没有文本”误判成“没有响应”。
     """
 
-    __slots__ = ("text_buf", "usage", "_done")
+    __slots__ = (
+        "text_buf",
+        "usage",
+        "_done",
+        "_output_item_types",
+        "_non_text_event_types",
+    )
 
     def __init__(self) -> None:
         self.text_buf: list[str] = []
         self.usage: dict[str, Any] | None = None
         self._done = False
+        self._output_item_types: set[str] = set()
+        self._non_text_event_types: set[str] = set()
 
     def feed(self, event_type: str, data: str) -> list[str]:
         """解析一个 SSE 事件，返回文本 token 列表（通常 0 或 1 个）。"""
@@ -276,6 +284,39 @@ class ConsoleStreamAdapter:
                 self.text_buf.append(delta)
                 return [delta]
 
+        elif event_type in {
+            "response.output_item.added",
+            "response.output_item.done",
+        }:
+            item = obj.get("item")
+            if isinstance(item, dict):
+                item_type = str(item.get("type") or "").strip()
+                if item_type:
+                    self._output_item_types.add(item_type)
+
+        elif event_type in {
+            "response.content_part.added",
+            "response.content_part.done",
+        }:
+            part = obj.get("part")
+            if isinstance(part, dict):
+                part_type = str(part.get("type") or "").strip()
+                if part_type:
+                    self._output_item_types.add(part_type)
+
+        elif event_type.startswith("response.reasoning") or event_type.startswith(
+            (
+                "response.function_call",
+                "response.custom_tool_call",
+                "response.file_search_call",
+                "response.web_search_call",
+                "response.x_search_call",
+                "response.image_generation_call",
+                "response.mcp_",
+            )
+        ):
+            self._non_text_event_types.add(event_type)
+
         elif event_type == "response.completed":
             resp = obj.get("response", {})
             self.usage = resp.get("usage")
@@ -290,6 +331,18 @@ class ConsoleStreamAdapter:
     @property
     def full_text(self) -> str:
         return "".join(self.text_buf)
+
+    @property
+    def output_item_types(self) -> frozenset[str]:
+        return frozenset(self._output_item_types)
+
+    @property
+    def has_non_text_output(self) -> bool:
+        return bool(self._output_item_types or self._non_text_event_types)
+
+    @property
+    def is_empty_response(self) -> bool:
+        return not self.full_text and not self.has_non_text_output
 
 
 def classify_console_line(line: str) -> tuple[str, str]:
