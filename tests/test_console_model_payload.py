@@ -116,6 +116,70 @@ class ConsoleModelPayloadTests(unittest.TestCase):
 
         self.assertEqual(payload["reasoning"], {"effort": "xhigh"})
 
+    def test_codex_catalog_reports_grok_46_without_none_effort(self):
+        catalog = _codex_model_catalog([
+            ("grok-4.6", registry.resolve("grok-4.6"), "Grok 4.6 (Console)"),
+        ])
+
+        model = catalog["models"][0]
+        self.assertEqual(model["default_reasoning_level"], "low")
+        self.assertEqual(
+            [item["effort"] for item in model["supported_reasoning_levels"]],
+            ["low", "medium", "high", "xhigh"],
+        )
+
+    def test_codex_catalog_distinguishes_fixed_and_non_reasoning_console_models(self):
+        catalog = _codex_model_catalog([
+            (
+                "grok-4.20-0309-reasoning-console",
+                registry.resolve("grok-4.20-0309-reasoning-console"),
+                "Grok 4.20 0309 Reasoning (Console)",
+            ),
+            (
+                "grok-4.20-0309-non-reasoning-console",
+                registry.resolve("grok-4.20-0309-non-reasoning-console"),
+                "Grok 4.20 0309 Non-Reasoning (Console)",
+            ),
+            (
+                "grok-4.20-multi-agent-console",
+                registry.resolve("grok-4.20-multi-agent-console"),
+                "Grok 4.20 Multi-Agent (Console)",
+            ),
+        ])
+        models = {model["slug"]: model for model in catalog["models"]}
+
+        self.assertEqual(models["grok-4.20-0309-reasoning-console"]["supported_reasoning_levels"], [])
+        self.assertTrue(models["grok-4.20-0309-reasoning-console"]["supports_reasoning_summaries"])
+        self.assertEqual(
+            [item["effort"] for item in models["grok-4.20-0309-non-reasoning-console"]["supported_reasoning_levels"]],
+            ["none"],
+        )
+        self.assertFalse(models["grok-4.20-0309-non-reasoning-console"]["supports_reasoning_summaries"])
+        self.assertEqual(
+            [item["effort"] for item in models["grok-4.20-multi-agent-console"]["supported_reasoning_levels"]],
+            ["low", "medium", "high", "xhigh"],
+        )
+
+    def test_grok_47_is_catalog_only_until_build_gateway_exists(self):
+        spec = registry.resolve("grok-4.7")
+        self.assertFalse(spec.is_console_chat())
+        self.assertFalse(spec.supported_in_api)
+        self.assertIn("Build OAuth", spec.availability_note or "")
+
+        catalog = _codex_model_catalog([
+            ("grok-4.7", spec, "Grok 4.7 (Build Catalog)"),
+        ])
+        model = catalog["models"][0]
+        self.assertEqual(model["context_window"], 500_000)
+        self.assertEqual(model["default_reasoning_level"], "low")
+        self.assertEqual(
+            [item["effort"] for item in model["supported_reasoning_levels"]],
+            ["low", "medium", "high", "xhigh"],
+        )
+        self.assertTrue(model["supports_reasoning_summaries"])
+        self.assertFalse(model["supported_in_api"])
+        self.assertIn("availability_note", model)
+
     def test_grok_build_base_model_keeps_fixed_no_reasoning_contract(self):
         payload = build_console_payload(
             messages=[{"role": "user", "content": "hello"}],
@@ -139,6 +203,7 @@ class ConsoleModelPayloadTests(unittest.TestCase):
             [item["effort"] for item in model["supported_reasoning_levels"]],
             ["none"],
         )
+        self.assertFalse(model["supports_reasoning_summaries"])
 
     def test_legacy_model_max_effort_remains_high(self):
         payload = build_console_payload(

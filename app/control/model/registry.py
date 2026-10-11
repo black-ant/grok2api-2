@@ -26,6 +26,16 @@ MODELS: tuple[ModelSpec, ...] = (
         supported_in_api=False,
         availability_note="Requires the remote Build OAuth provider; no local Build gateway is available.",
     ),
+    ModelSpec(
+        "grok-4.7",
+        ModeId.FAST,
+        Tier.BASIC,
+        Capability.CHAT,
+        True,
+        "Grok 4.7 (Build Catalog)",
+        supported_in_api=False,
+        availability_note="Requires the remote Build OAuth provider; no local Build gateway is available.",
+    ),
 
     # Basic fast; auto/expert require Super+
     ModelSpec("grok-4.20-0309-non-reasoning",           ModeId.FAST,     Tier.BASIC, Capability.CHAT,       True, "Grok 4.20 0309 Non-Reasoning"),

@@ -57,6 +57,10 @@ _CODEX_MODEL_METADATA: dict[str, dict[str, object]] = {
         "context_window": 500_000,
         "description": "xAI Grok 4.6 frontier model with reasoning and vision.",
     },
+    "grok-4.7": {
+        "context_window": 500_000,
+        "description": "xAI Grok 4.7 frontier model with reasoning and vision.",
+    },
     "grok-4.20-0309": {
         "context_window": 2_000_000,
         "description": "xAI Grok 4.20 reasoning model.",
@@ -82,6 +86,23 @@ _CODEX_MODEL_METADATA: dict[str, dict[str, object]] = {
         "description": "xAI Grok Build 0.1 coding model.",
     },
 }
+
+_CODEX_REASONING_LEVELS: dict[str, tuple[str, ...]] = {
+    "grok-4.3": ("none", "low", "medium", "high"),
+    "grok-4.3-console": ("none", "low", "medium", "high"),
+    "grok-4.5": ("low", "medium", "high"),
+    "grok-4.5-console": ("low", "medium", "high"),
+    "grok-4.6": ("low", "medium", "high", "xhigh"),
+    "grok-4.7": ("low", "medium", "high", "xhigh"),
+    "grok-4.20-0309-non-reasoning-console": ("none",),
+    "grok-4.20-multi-agent-console": ("low", "medium", "high", "xhigh"),
+    "grok-build-0.1": ("none",),
+    "grok-build-console": ("none",),
+    "grok-composer-2.5-fast": ("none",),
+}
+_CODEX_FIXED_REASONING_MODELS = frozenset({
+    "grok-4.20-0309-reasoning-console",
+})
 
 
 async def _available_pools(request: Request) -> frozenset[str]:
@@ -188,15 +209,14 @@ def _codex_reasoning_levels(model_id: str, spec: ModelSpec) -> list[str]:
     for suffix in ("xhigh", "high", "medium", "low"):
         if model_id.endswith(f"-{suffix}"):
             return [suffix]
+    explicit_levels = _CODEX_REASONING_LEVELS.get(model_id)
+    if explicit_levels is not None:
+        return list(explicit_levels)
+    if model_id in _CODEX_FIXED_REASONING_MODELS:
+        return []
     if "reasoning" in model_id or model_id.endswith(("-expert", "-heavy")):
         return ["high"]
     if int(spec.mode_id) == 1:
-        return ["none"]
-    if model_id in {"grok-4.5", "grok-4.5-console"}:
-        return ["low", "medium", "high"]
-    if model_id == "grok-4.6":
-        return ["none", "low", "medium", "high", "xhigh"]
-    if model_id in {"grok-build-0.1", "grok-build-console"}:
         return ["none"]
     return ["none", "low", "medium", "high"]
 
@@ -206,16 +226,21 @@ def _codex_model_catalog(
 ) -> dict[str, list[dict[str, object]]]:
     descriptions = {
         "none": "No reasoning",
+        "minimal": "Minimal reasoning for the fastest responses",
         "low": "Fast responses with lighter reasoning",
         "medium": "Balances speed and reasoning depth for everyday tasks",
         "high": "Greater reasoning depth for complex problems",
         "xhigh": "Extra high reasoning depth for complex problems",
+        "max": "Maximum reasoning depth for the hardest problems",
     }
     models: list[dict[str, object]] = []
     for index, (model_id, spec, public_name) in enumerate(entries, start=1):
         metadata = _CODEX_MODEL_METADATA.get(model_id, {})
         context_window = int(metadata.get("context_window", 128_000))
         levels = _codex_reasoning_levels(model_id, spec)
+        reasoning_supported = model_id in _CODEX_FIXED_REASONING_MODELS or any(
+            level != "none" for level in levels
+        )
         default_level = levels[0] if levels else "none"
         if levels == ["high"]:
             default_level = "high"
@@ -245,8 +270,8 @@ def _codex_model_catalog(
             "base_instructions": "",
             "model_messages": None,
             "include_skills_usage_instructions": False,
-            "supports_reasoning_summary_parameter": bool(levels),
-            "supports_reasoning_summaries": bool(levels),
+            "supports_reasoning_summary_parameter": reasoning_supported,
+            "supports_reasoning_summaries": reasoning_supported,
             "default_reasoning_summary": "auto",
             "support_verbosity": False,
             "default_verbosity": None,
