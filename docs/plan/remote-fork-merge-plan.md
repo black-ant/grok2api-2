@@ -2,6 +2,12 @@
 
 更新时间：2026-10-11
 
+## 本轮远程快照
+
+- `chenyme/main`：`7c889a96`（2026-09-30），与当前 Python 主线没有共同祖先；只做逐提交移植。
+- `upstream-jiujiu/main`：`ef7fb4f2`（2026-08-26），是当前 Python 主线的祖先；没有发现比本地基线更新且尚未吸收的 Jiujiu 提交。
+- 当前本地 `main`：已领先 `origin/main` 4 个阶段提交；不执行整分支 merge。
+
 ## 范围
 
 - `chenyme/grok2api`：当前远程主线 `7c889a96`，以 Go Gateway / Build OAuth 为主。
@@ -37,6 +43,22 @@
 - `3116c15b` 暂缓：Python 当前没有 provider-wide 失败与 account-scoped 失败的同等分类。
 - `d7fca59d` 暂缓：Python 尚未统一识别非流式空响应和“有无有效输出”的账号惩罚边界。
 
+### 本轮逐项结论
+
+| 远程提交 | 处理结果 | 原因 |
+| --- | --- | --- |
+| `7f3f3d3c` | 跳过 | Go `quality_retry` 质量扫描器、可见 token 统计和账号质量隔离在 Python 中不存在；不能按文件名硬移植。 |
+| `6db9f67f`、`df4dde39` | 跳过 | Python Console payload 当前由模型能力静态生成，不转发客户端 `tools/tool_choice`；没有对应的空工具对。 |
+| `7d1b4246`、`ca392e68`、`8641a782`、`3de758e7` | 跳过 | 依赖 Go Build Responses 历史、reasoning replay 和多轮工具上下文。 |
+| `22ac653a`、`e5285ebe` | 已改造 | 已由 `1c1fc2b4` 只处理 Python 工具提示中的根层联合类型。 |
+| `72a3a347`、`5d19ccff` | 暂缓 | 深层 `$ref` 展开和 grammar flatten 只属于 Build 网关；当前没有可验证的本地上游链路。 |
+| `7ebc46c7` | 跳过 | Go relational `ModelRoute` 手工路由与 Python 运行时 alias 不是同一数据模型。 |
+| `15bf810a` | 暂缓 | Python 现有回归测试明确要求 `Retry-After` 可覆盖模型冷却上限；远程改动针对 Go 账号 selector 的独立 `cooldownMax`，直接改会改变既有语义。 |
+| `155ebba7` | 跳过 | `view_image` 是 Build 原生工具别名；本地 `grok-4.7` 仍是 catalog-only。 |
+| `9dda42ae` | 已改造 | 已移植可验证的模型目录和 reasoning 元数据；Build headers、OAuth、live catalog 不移植。 |
+
+下一批只做一个最小验证：为 Python `ConsoleStreamAdapter` 增加输出事件分类测试，区分文本、工具/媒体输出和纯生命周期事件；在此证据完成前，不启用空响应账号降级或自动重试。
+
 ### 阶段 D：Build 专属协议
 
 以下提交只登记，不直接移植：
@@ -63,4 +85,3 @@
 3. 一个功能批次只改相关文件，并补最小回归测试。
 4. 通过专项测试、`compileall`、`git diff --check` 后单独提交。
 5. 不执行 `git merge chenyme/main`，不覆盖已有提交。
-
