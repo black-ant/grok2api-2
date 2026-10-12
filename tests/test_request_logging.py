@@ -7,6 +7,16 @@ from app.platform.request_logging import RequestLogStore, _env_prefixes, _path_m
 
 
 class RequestLoggingTests(unittest.TestCase):
+    def test_request_logs_page_supports_status_filter(self):
+        from pathlib import Path
+
+        html = Path("app/statics/admin/request-logs.html").read_text(encoding="utf-8")
+        endpoint = Path("app/products/web/admin/__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn('id="status-filter"', html)
+        self.assertIn("status: statusFilter", html)
+        self.assertIn('"status": status', endpoint)
+
     def test_request_logs_page_shows_routing_columns(self):
         from pathlib import Path
 
@@ -49,6 +59,28 @@ class RequestLoggingTests(unittest.TestCase):
             page = store._read_items_locked(limit=2, offset=2)
 
         self.assertEqual([item["id"] for item in page], ["2", "1"])
+
+    def test_request_log_store_filters_status_classes_before_paging(self):
+        with TemporaryDirectory() as tmp:
+            from pathlib import Path
+
+            store = RequestLogStore(directory=Path(tmp))
+            log_date = store.retained_dates()[0]
+            path = store._path_for_date(log_date)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entries = [
+                {"id": "server", "log_date": log_date, "created_ts": 5.0, "status_code": 500},
+                {"id": "client-latest", "log_date": log_date, "created_ts": 4.0, "status_code": 404},
+                {"id": "client-earlier", "log_date": log_date, "created_ts": 3.0, "status_code": 401},
+                {"id": "success", "log_date": log_date, "created_ts": 2.0, "status_code": 200},
+            ]
+            path.write_bytes(b"".join(orjson.dumps(entry) + b"\n" for entry in entries))
+
+            page = store._read_items_locked(limit=1, offset=1, status_class="4xx")
+            total = store._count_locked(status_class="4xx")
+
+        self.assertEqual([item["id"] for item in page], ["client-earlier"])
+        self.assertEqual(total, 2)
 
     def test_request_log_store_preserves_routing_metadata(self):
         with TemporaryDirectory() as tmp:

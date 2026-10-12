@@ -8,7 +8,7 @@ import asyncio
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -304,8 +304,9 @@ async def runtime_status():
 async def get_request_logs(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    status: Literal["all", "2xx", "3xx", "4xx", "5xx"] = Query("all"),
 ):
-    total = await request_log_store.count()
+    total = await request_log_store.count(status_class=status)
     return Response(
         content=orjson.dumps(
             {
@@ -314,7 +315,8 @@ async def get_request_logs(
                 "total": total,
                 "limit": limit,
                 "offset": offset,
-                "items": await request_log_store.list(limit=limit, offset=offset),
+                "status": status,
+                "items": await request_log_store.list(limit=limit, offset=offset, status_class=status),
             }
         ),
         media_type="application/json",

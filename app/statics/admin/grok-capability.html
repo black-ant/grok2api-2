@@ -732,7 +732,6 @@ function openBatchModal() {
 }
 
 function closeBatchModal() {
-  if (batchRunning) return;
   const modal = document.getElementById('batch-modal');
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');

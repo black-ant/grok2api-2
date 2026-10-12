@@ -281,6 +281,10 @@ class ConfigHtmlReviewFixTests(unittest.TestCase):
 
 
 class GrokCapabilityHtmlReviewFixTests(unittest.TestCase):
+    def test_batch_modal_can_close_while_running(self):
+        html = Path('app/statics/admin/grok-capability.html').read_text(encoding='utf-8')
+        self.assertNotIn('if (batchRunning) return;', html)
+
     def test_batch_alias_add_reports_pending_and_failure(self):
         html = Path('app/statics/admin/grok-capability.html').read_text(encoding='utf-8')
 

@@ -26,6 +26,7 @@ _DEFAULT_BODY_LIMIT = 64 * 1024
 _DEFAULT_PATH_PREFIXES = ("/v1", "/webui/api", "/admin/api/debug/chat")
 _LOG_FILE_PREFIX = "request_"
 _LOG_FILE_SUFFIX = ".jsonl"
+_REQUEST_STATUS_CLASSES = frozenset({"all", "2xx", "3xx", "4xx", "5xx"})
 
 _USAGE_METRIC_KEYS = frozenset(
     {
@@ -245,17 +246,35 @@ class RequestLogStore:
         finally:
             os.close(fd)
 
-    def _read_items_locked(self, *, limit: int, offset: int = 0) -> list[dict[str, Any]]:
+    def _status_matches(self, item: dict[str, Any], status_class: str | None) -> bool:
+        if not status_class or status_class == "all":
+            return True
+        if status_class not in _REQUEST_STATUS_CLASSES:
+            return False
+        try:
+            status_code = int(item.get("status_code"))
+        except (TypeError, ValueError):
+            return False
+        lower_bound = int(status_class[0]) * 100
+        return lower_bound <= status_code < lower_bound + 100
+
+    def _read_items_locked(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        status_class: str | None = None,
+    ) -> list[dict[str, Any]]:
         self._cleanup_locked()
         items: list[dict[str, Any]] = []
-        read_limit = max(1, limit + max(0, offset))
+        read_limit = None if status_class and status_class != "all" else max(1, limit + max(0, offset))
         for log_date in self.retained_dates():
             path = self._path_for_date(log_date)
             if not path.exists():
                 continue
             try:
                 with path.open("rb") as file:
-                    lines = deque(file, maxlen=read_limit)
+                    lines = list(file) if read_limit is None else deque(file, maxlen=read_limit)
             except FileNotFoundError:
                 continue
             for line in reversed(lines):
@@ -265,7 +284,7 @@ class RequestLogStore:
                     item = orjson.loads(line)
                 except orjson.JSONDecodeError:
                     continue
-                if isinstance(item, dict):
+                if isinstance(item, dict) and self._status_matches(item, status_class):
                     items.append(item)
         items.sort(key=lambda item: float(item.get("created_ts") or 0), reverse=True)
         start = max(0, offset)
@@ -328,7 +347,7 @@ class RequestLogStore:
         ]
         return len(records), records[max(0, offset):max(0, offset) + limit]
 
-    def _count_locked(self) -> int:
+    def _count_locked(self, *, status_class: str | None = None) -> int:
         self._cleanup_locked()
         count = 0
         for log_date in self.retained_dates():
@@ -337,7 +356,18 @@ class RequestLogStore:
                 continue
             try:
                 with path.open("rb") as file:
-                    count += sum(1 for line in file if line.strip())
+                    if not status_class or status_class == "all":
+                        count += sum(1 for line in file if line.strip())
+                    else:
+                        for line in file:
+                            if not line.strip():
+                                continue
+                            try:
+                                item = orjson.loads(line)
+                            except orjson.JSONDecodeError:
+                                continue
+                            if isinstance(item, dict) and self._status_matches(item, status_class):
+                                count += 1
             except FileNotFoundError:
                 continue
         return count
@@ -346,9 +376,20 @@ class RequestLogStore:
         async with self._lock:
             await asyncio.to_thread(self._write_entry_locked, entry)
 
-    async def list(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+    async def list(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        status_class: str | None = None,
+    ) -> list[dict[str, Any]]:
         async with self._lock:
-            return await asyncio.to_thread(self._read_items_locked, limit=limit, offset=offset)
+            return await asyncio.to_thread(
+                self._read_items_locked,
+                limit=limit,
+                offset=offset,
+                status_class=status_class,
+            )
 
     async def audit_page(
         self,
@@ -390,9 +431,9 @@ class RequestLogStore:
             model=model,
             status=status,
         )
-    async def count(self) -> int:
+    async def count(self, *, status_class: str | None = None) -> int:
         async with self._lock:
-            return await asyncio.to_thread(self._count_locked)
+            return await asyncio.to_thread(self._count_locked, status_class=status_class)
 
 
 request_log_store = RequestLogStore(retention_days=_DEFAULT_RETENTION_DAYS)

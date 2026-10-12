@@ -13,6 +13,7 @@
     .page-title { font-size:22px; font-weight:700; line-height:1.2 }
     .page-actions { display:flex; align-items:center; gap:8px }
     .log-count { font-size:12px; color:var(--fg-muted); white-space:nowrap }
+    .log-status-filter { width:126px }
     .logs-table th { background:#fff; text-transform:none; letter-spacing:0 }
     .logs-table td { white-space:nowrap }
     .logs-table tr { cursor:pointer }
@@ -61,6 +62,13 @@
   <div class="page-hd">
     <div class="page-title">请求日志</div>
     <div class="page-actions">
+      <select class="input log-status-filter" id="status-filter" aria-label="状态筛选">
+        <option value="all">全部状态</option>
+        <option value="2xx">2xx 成功</option>
+        <option value="3xx">3xx 重定向</option>
+        <option value="4xx">4xx 客户端错误</option>
+        <option value="5xx">5xx 服务端错误</option>
+      </select>
       <div class="log-count" id="log-count">—</div>
       <button type="button" class="btn btn-primary" id="refresh-btn">刷新</button>
     </div>
@@ -133,6 +141,7 @@ let currentPage = 1;
 let pageSize = 20;
 let totalLogs = 0;
 let activeLogDetail = null;
+let statusFilter = 'all';
 
 function esc(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -312,7 +321,7 @@ function renderRows() {
   document.getElementById('prev-page').disabled = currentPage <= 1;
   document.getElementById('next-page').disabled = currentPage >= pageCount;
   if (!requestLogs.length) {
-    rows.innerHTML = '<tr><td colspan="11" class="loading-cell">暂无日志</td></tr>';
+    rows.innerHTML = `<tr><td colspan="11" class="loading-cell">${statusFilter === 'all' ? '暂无日志' : '暂无符合条件的日志'}</td></tr>`;
     return;
   }
   rows.innerHTML = requestLogs.map((item, index) => `
@@ -336,7 +345,12 @@ function renderRows() {
 
 async function loadLogs() {
   const offset = (currentPage - 1) * pageSize;
-  const res = await fetch(`${ADMIN_API}/request-logs?limit=${pageSize}&offset=${offset}`, {
+  const query = new URLSearchParams({
+    limit: String(pageSize),
+    offset: String(offset),
+    status: statusFilter,
+  });
+  const res = await fetch(`${ADMIN_API}/request-logs?${query.toString()}`, {
     headers: { Authorization: `Bearer ${adminAuthKey}` },
     cache: 'no-store',
   });
@@ -345,6 +359,8 @@ async function loadLogs() {
   retainedDates = payload.retained_dates || [];
   requestLogs = payload.items || [];
   totalLogs = Number(payload.total || requestLogs.length || 0);
+  statusFilter = payload.status || statusFilter;
+  document.getElementById('status-filter').value = statusFilter;
   const pageCount = Math.max(1, Math.ceil(totalLogs / pageSize));
   if (currentPage > pageCount) {
     currentPage = pageCount;
@@ -415,6 +431,15 @@ function waitI18n() {
     try {
       await loadLogs();
       window.showToast?.('已刷新', 'success');
+    } catch (e) {
+      window.showToast?.('请求日志加载失败', 'error');
+    }
+  });
+  document.getElementById('status-filter').addEventListener('change', async (event) => {
+    statusFilter = event.target.value || 'all';
+    currentPage = 1;
+    try {
+      await loadLogs();
     } catch (e) {
       window.showToast?.('请求日志加载失败', 'error');
     }
