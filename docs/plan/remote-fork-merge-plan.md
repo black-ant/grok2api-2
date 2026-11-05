@@ -1,10 +1,10 @@
 # 远程 Fork 增量合并计划
 
-更新时间：2026-10-11
+更新时间：2026-11-05
 
 ## 本轮远程快照
 
-- `chenyme/main`：`7c889a96`（2026-09-30），与当前 Python 主线没有共同祖先；只做逐提交移植。
+- `chenyme/main`：`e2fd7ab4`（2026-10-22），较上次核对的 `7c889a96` 新增 24 个功能提交；与当前 Python 主线没有共同祖先，只做逐提交移植。
 - `upstream-jiujiu/main`：`ef7fb4f2`（2026-08-26），是当前 Python 主线的祖先；没有发现比本地基线更新且尚未吸收的 Jiujiu 提交。
 - 当前本地 `main`：已领先 `origin/main` 4 个阶段提交；不执行整分支 merge。
 
@@ -79,6 +79,27 @@
 - Go 账号 selector、quality guard、audit retention、egress profiles、HTTP/2 transport。
 - Go Console quota reconciliation、Build credential refresh、Build bot-risk、provider gateway。
 - Go frontend/admin 页面改动；当前 Python 管理端结构和页面职责不同。
+
+## 2026-11-05 增量复核（`7c889a96..e2fd7ab4`）
+
+共 24 个非合并提交。逐项结论如下，未列出的合并提交均为文档、版本号或依赖锁文件变更。
+
+| 远程提交 | 处理结果 | 原因 |
+| --- | --- | --- |
+| `8038dca6`、`2f29773b`、`23793f3e` | 待移植（推荐） | Imagine WebSocket 事件按 `requestId` 过滤。本地 `app/dataplane/reverse/transport/imagine_ws.py` 在一条连接上跨轮复用，`_stream_round` 每轮只重建 slot 表、不校验帧归属，上一轮未结束的帧会被当成新一轮数据。移植时采用宽松判定：帧带 `requestId` 且与本轮不符才丢弃，缺字段的帧保持放行，避免畸形帧导致整轮空结果；需补多轮复用回归测试。 |
+| `ea563c31`、`0a3efcc4` | 待移植（推荐） | 支持 `地址:端口:用户名:密码` 的老式代理写法。本地 `app/control/proxy/__init__.py` 的 `load()` 直接使用配置文本构造成出站节点，没有规范化步骤，用户按代理服务商给的原始格式填写会直接连接失败。落点应放在节点构建前，只在解析成功时改写，其余情况保留原值。 |
+| `abc5c294`、`cfc5865d`、`bedc88fe` | 跳过 | SSO→Build 设备流的 consent token；本地没有 Build OAuth 链路。 |
+| `a88cd880` | 跳过 | Build 账号未知 403 冷却；本地无 Build provider 与账号分类。 |
+| `31bbe64d` | 跳过 | 视频任务重试绕过客户端密钥作用域；本地没有客户端密钥作用域概念，视频重试始终限定在模型自身的账号池内。 |
+| `6c193995`、`b789e846`、`659ee8ca`、`4e220e81` | 暂缓 | 质量重试、自动停用降级账号、瞬时重试计数与请求头；依赖 Go 侧质量守护与 Build 客户端语义，本地无对应状态模型。其中 525/526 不参与账号轮换的边界可单独评估，但当前本地无 Build 上游，证据不足。 |
+| `6ea58d3a`、`dbd1a29f` | 暂不合并 | 语音长连接观察请求超时并按确认时长计费；本地没有计费通道，也没有服务端请求超时配置，长连接生命周期由客户端断开驱动。 |
+| `6cd06ea5` | 跳过 | 视频任务在 worker 停机后的恢复；本地视频为同步流式生成，没有后台任务表。 |
+| `838aca3c` | 跳过 | Console 未绑定账号自动删除、配额刷新最小间隔调整；本地没有 reauth/未绑定状态模型，按需刷新节流已是 300 秒。 |
+| `eaca3d0e`、`f18624b1` | 未确认 | Console usage-status 的 `budgetCents`/`usedCents` 边界与溢出处理；本地当前没有该解析入口。最小验证：确认本地是否需要 Console 付费额度同步，再决定是否新增解析器。 |
+| `87407fe1` | 跳过 | uTLS Reality 握手的 ECDHE key share；Go 隧道内核专属。 |
+| `31e660bc` | 只登记 | Dockerfile 与前后端依赖升级；本地为 Python 镜像，依赖树不同，证书包由基础镜像维护。 |
+| `a23e4654` | 跳过 | Go 1.27 的 HTTP/2 测试适配。 |
+| `e03cacb9` | 跳过 | README 赞助商条目删除。 |
 
 ## 每批提交规则
 
