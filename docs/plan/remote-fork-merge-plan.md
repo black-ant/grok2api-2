@@ -80,14 +80,27 @@
 - Go Console quota reconciliation、Build credential refresh、Build bot-risk、provider gateway。
 - Go frontend/admin 页面改动；当前 Python 管理端结构和页面职责不同。
 
+## 2026-11-06 本地可靠性批次
+
+本轮按“用户可感知 + 改动成本”排序，落地此前登记的待移植项与自查缺口，均为 Python 侧改造：
+
+| 事项 | 落地位置 | 结论 |
+| --- | --- | --- |
+| 流式静默保活 | `app/products/_sse_keepalive.py`；对话 / Responses / Messages 三条流式接口统一补 `: heartbeat` 注释帧 | 新增 `chat.stream_keepalive`（默认 15 秒，0 关闭） |
+| 内容拒答不再判为账号故障 | `xai_usage.is_content_refusal_*`、`ResultCategory.REFUSAL`、`FeedbackKind.REFUSED` | 拒答不打账号、不换号、不惩罚代理、不计失败次数 |
+| 图片跨轮帧归属 | `imagine_ws._stream_round` 按 `requestId` 丢弃上一轮残留帧 | 宽松自适应：出现首个带号帧后严格判定，缺号帧保持兼容 |
+| 上游异常截断 | `UpstreamStreamIncompleteError`；Console 流强制校验，grok.com 流由配置开启 | 新增 `chat.require_stream_terminal`（默认关闭，避免误伤无结束标记的上游） |
+| 老式代理写法 | `control/proxy/config.normalize_legacy_http_proxy` | 仅 IPv4 + 端口 + 双凭据完全匹配时改写，其余原样保留 |
+| 生图模型同名支持编辑（参照未合并 PR #1063） | `Capability.IMAGE_EDIT` 加到 `grok-imagine-image` / `-pro`；`router._image_operation` 按请求是否带参考图分派 | 带参考图自动转编辑链路，不带图仍为生成；不支持编辑的模型（lite）改为报错而不是静默丢弃图片；WebUI 与标签同步调整 |
+
 ## 2026-11-05 增量复核（`7c889a96..e2fd7ab4`）
 
 共 24 个非合并提交。逐项结论如下，未列出的合并提交均为文档、版本号或依赖锁文件变更。
 
 | 远程提交 | 处理结果 | 原因 |
 | --- | --- | --- |
-| `8038dca6`、`2f29773b`、`23793f3e` | 待移植（推荐） | Imagine WebSocket 事件按 `requestId` 过滤。本地 `app/dataplane/reverse/transport/imagine_ws.py` 在一条连接上跨轮复用，`_stream_round` 每轮只重建 slot 表、不校验帧归属，上一轮未结束的帧会被当成新一轮数据。移植时采用宽松判定：帧带 `requestId` 且与本轮不符才丢弃，缺字段的帧保持放行，避免畸形帧导致整轮空结果；需补多轮复用回归测试。 |
-| `ea563c31`、`0a3efcc4` | 待移植（推荐） | 支持 `地址:端口:用户名:密码` 的老式代理写法。本地 `app/control/proxy/__init__.py` 的 `load()` 直接使用配置文本构造成出站节点，没有规范化步骤，用户按代理服务商给的原始格式填写会直接连接失败。落点应放在节点构建前，只在解析成功时改写，其余情况保留原值。 |
+| `8038dca6`、`2f29773b`、`23793f3e` | 已移植（2026-11-06） | Imagine WebSocket 事件按 `requestId` 过滤。本地 `app/dataplane/reverse/transport/imagine_ws.py` 在一条连接上跨轮复用，`_stream_round` 每轮只重建 slot 表、不校验帧归属，上一轮未结束的帧会被当成新一轮数据。落地采用自适应宽松判定：出现首个带号帧后严格比对，缺号帧在首个带号帧之前仍放行，避免无号上游整轮空结果；已补多轮复用回归测试。 |
+| `ea563c31`、`0a3efcc4` | 已移植（2026-11-06） | 支持 `地址:端口:用户名:密码` 的老式代理写法。本地 `app/control/proxy/__init__.py` 的 `load()` 直接使用配置文本构造成出站节点，没有规范化步骤，用户按代理服务商给的原始格式填写会直接连接失败。已在节点构建前统一规范化，只在解析成功时改写，其余情况保留原值。 |
 | `abc5c294`、`cfc5865d`、`bedc88fe` | 跳过 | SSO→Build 设备流的 consent token；本地没有 Build OAuth 链路。 |
 | `a88cd880` | 跳过 | Build 账号未知 403 冷却；本地无 Build provider 与账号分类。 |
 | `31bbe64d` | 跳过 | 视频任务重试绕过客户端密钥作用域；本地没有客户端密钥作用域概念，视频重试始终限定在模型自身的账号池内。 |
