@@ -63,6 +63,7 @@
         "enterPrompt": "Introduzca un mensaje",
         "imageRequired": "La edición de imagen requiere al menos una imagen de referencia",
         "imageOnly": "La edición de imagen solo admite cargas de imágenes",
+        "imageModelImageOnly": "Los modelos de imagen solo admiten imágenes como referencia de edición",
         "videoImageOnly": "La generación de vídeo solo admite imágenes como referencia",
         "imageProxyRequired": "No se pudo cargar la imagen. Configure la URL base de APP y cambie el formato de salida de imagen a local_url, local_md o base64.",
         "videoProxyRequired": "La carga del vídeo devolvió 403. Vaya a la página de administración, configure la URL base de APP y cambie el formato de salida de vídeo al modo de proxy local (local_url o local_html). Después, inténtelo de nuevo.",

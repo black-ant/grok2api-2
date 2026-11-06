@@ -63,6 +63,7 @@
         "enterPrompt": "Bitte geben Sie eine Nachricht ein",
         "imageRequired": "Für die Bildbearbeitung ist mindestens ein Referenzbild erforderlich",
         "imageOnly": "Die Bildbearbeitung unterstützt nur Bild-Uploads",
+        "imageModelImageOnly": "Bildmodelle akzeptieren nur Bilder als Bearbeitungsreferenz",
         "videoImageOnly": "Die Videogenerierung unterstützt nur Bild-Uploads als Referenz",
         "imageProxyRequired": "Bild konnte nicht geladen werden. Konfigurieren Sie die APP-Basis-URL und ändern Sie das Bildausgabeformat in local_url, local_md oder base64.",
         "videoProxyRequired": "Das Laden des Videos ergab 403. Öffnen Sie die Admin-Seite, konfigurieren Sie die APP-Basis-URL und ändern Sie das Videoausgabeformat in den lokalen Proxy-Modus (local_url oder local_html). Versuchen Sie es dann erneut.",

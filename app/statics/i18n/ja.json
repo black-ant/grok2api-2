@@ -63,6 +63,7 @@
         "enterPrompt": "メッセージを入力してください",
         "imageRequired": "画像編集には少なくとも 1 枚の参照画像が必要です",
         "imageOnly": "画像編集では画像ファイルのみアップロードできます",
+        "imageModelImageOnly": "画像モデルは編集の参照として画像のみアップロードできます",
         "videoImageOnly": "動画生成では参照として画像のみアップロードできます",
         "imageProxyRequired": "画像を読み込めませんでした。APP ベース URL を設定し、画像の返却形式を local_url、local_md、または base64 に変更してください。",
         "videoProxyRequired": "動画の読み込みで 403 が返されました。管理ページで APP ベース URL を設定し、動画の返却形式をローカルプロキシモード（local_url または local_html）に変更してから再試行してください。",

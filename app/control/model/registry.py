@@ -66,9 +66,9 @@ MODELS: tuple[ModelSpec, ...] = (
 
     # Basic fast
     ModelSpec("grok-imagine-image-lite",                ModeId.FAST,     Tier.BASIC, Capability.IMAGE,      True, "Grok Imagine Image Lite"),
-    # Super+
-    ModelSpec("grok-imagine-image",                     ModeId.AUTO,     Tier.SUPER, Capability.IMAGE,      True, "Grok Imagine Image"),
-    ModelSpec("grok-imagine-image-pro",                 ModeId.AUTO,     Tier.SUPER, Capability.IMAGE,      True, "Grok Imagine Image Pro"),
+    # Super+ — 带参考图时同名走编辑链路，因此同时声明生成与编辑能力。
+    ModelSpec("grok-imagine-image",                     ModeId.AUTO,     Tier.SUPER, Capability.IMAGE | Capability.IMAGE_EDIT, True, "Grok Imagine Image"),
+    ModelSpec("grok-imagine-image-pro",                 ModeId.AUTO,     Tier.SUPER, Capability.IMAGE | Capability.IMAGE_EDIT, True, "Grok Imagine Image Pro"),
 
     # === Image Edit =========================================================
 

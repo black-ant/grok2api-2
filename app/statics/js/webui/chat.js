@@ -908,13 +908,15 @@
     }));
 
     if (capability === 'image') {
-      if (pendingFiles.length) {
+      if (audioBlocks.length || fileBlocks.length) {
         throw new Error(text(
-          'webui.chat.errors.imageUploadsNotSupported',
-          'Image generation does not accept uploaded references here. Use chat, image edit, or video with a reference image.',
+          'webui.chat.errors.imageModelImageOnly',
+          'Image models only accept images as edit references',
         ));
       }
-      return { role: 'user', content: prompt };
+      return imageBlocks.length
+        ? { role: 'user', content: [...textBlock, ...imageBlocks] }
+        : { role: 'user', content: prompt };
     }
     if (capability === 'image_edit') {
       if (!imageBlocks.length) {

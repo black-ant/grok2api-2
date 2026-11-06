@@ -83,6 +83,7 @@
         "enterPrompt": "Please enter a message",
         "imageRequired": "Image edit requires at least one reference image",
         "imageOnly": "Image edit only supports image uploads",
+        "imageModelImageOnly": "Image models only accept images as edit references",
         "videoImageOnly": "Video generation only supports image reference uploads",
         "imageProxyRequired": "Image failed to load. Set APP Base URL and change image output format to local_url, local_md, or base64.",
         "videoProxyRequired": "Video loading returned 403. Go to the admin page, set the APP Base URL, then change the video output format to local proxy mode (local_url or local_html) and retry.",

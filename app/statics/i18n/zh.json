@@ -83,6 +83,7 @@
         "enterPrompt": "请输入内容",
         "imageRequired": "图像编辑至少需要上传一张参考图",
         "imageOnly": "图像编辑只支持上传图片",
+        "imageModelImageOnly": "图像模型只支持上传图片作为编辑参考",
         "videoImageOnly": "视频生成只支持上传图片作为参考图",
         "imageProxyRequired": "图片加载失败。请先设置 APP 访问地址，并将图片返回格式改为 local_url、local_md 或 base64。",
         "videoProxyRequired": "视频加载 403，请前往管理页面设置 APP 访问地址后，将频返回格式改为本地代理（ local_url 或 local_html）模式后重试。",

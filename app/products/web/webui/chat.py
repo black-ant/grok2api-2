@@ -14,10 +14,12 @@ router = APIRouter(prefix="/webui/api", dependencies=[Depends(verify_webui_key)]
 
 
 def _capability_name(spec) -> str:
-    if spec.is_image_edit():
-        return "image_edit"
+    # 能生成的模型统一报 "image"：参考图存在时服务端会自动转成编辑链路，
+    # 只有纯编辑模型才需要强制上传参考图。
     if spec.is_image():
         return "image"
+    if spec.is_image_edit():
+        return "image_edit"
     if spec.is_video():
         return "video"
     return "chat"

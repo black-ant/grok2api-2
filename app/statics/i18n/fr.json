@@ -63,6 +63,7 @@
         "enterPrompt": "Veuillez saisir un message",
         "imageRequired": "L’édition d’image nécessite au moins une image de référence",
         "imageOnly": "L’édition d’image ne prend en charge que les téléversements d’images",
+        "imageModelImageOnly": "Les modèles d’image n’acceptent que des images comme référence d’édition",
         "videoImageOnly": "La génération vidéo n’accepte que les images comme référence",
         "imageProxyRequired": "Échec du chargement de l’image. Configurez l’URL de base APP et changez le format de sortie image en local_url, local_md ou base64.",
         "videoProxyRequired": "Le chargement de la vidéo a renvoyé 403. Accédez à la page d’administration, configurez l’URL de base APP, puis passez le format de sortie vidéo en mode proxy local (local_url ou local_html) et réessayez.",

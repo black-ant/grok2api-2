@@ -176,6 +176,25 @@ def _message_image_count(messages: list[dict]) -> int:
     )
 
 
+def _image_operation(spec, reference_count: int) -> str:
+    """Pick the image pipeline for one chat request.
+
+    Plain prompts keep generating images; a prompt that carries reference
+    images is routed to the edit pipeline so clients can stay on one model
+    name. A model without edit support reports the mismatch instead of
+    silently dropping the uploaded images.
+    """
+    if reference_count == 0:
+        return "image" if spec.is_image() else "image_edit"
+    if spec.is_image_edit():
+        return "image_edit"
+    raise ValidationError(
+        f"Model {spec.model_name!r} does not support image editing with "
+        "reference images; use an edit-capable image model",
+        param="messages",
+    )
+
+
 def _standard_model_entry(
     *,
     model_id: str,
@@ -637,32 +656,31 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
     is_stream = (
         req.stream if req.stream is not None else cfg.get_bool("features.stream", True)
     )
+    messages = [m.model_dump(exclude_none=True) for m in req.messages]
+    is_image_model = bool(spec.is_image() or spec.is_image_edit())
+    image_references = _message_image_count(messages) if is_image_model else 0
+    image_operation = _image_operation(spec, image_references) if is_image_model else ""
     operation = (
-        "image_edit" if spec.is_image_edit()
-        else "image" if spec.is_image()
+        image_operation if is_image_model
         else "video" if spec.is_video()
         else "chat"
     )
     request.state.request_log_operation = operation
     request.state.request_log_streaming = is_stream
     media_usage: dict[str, int] = {}
-    if spec.is_image_edit():
-        media_usage["media_input_images"] = _message_image_count(
-            [m.model_dump(exclude_none=True) for m in req.messages]
-        )
+    if image_operation == "image_edit":
+        media_usage["media_input_images"] = image_references
         media_usage["media_output_images"] = (req.image_config or ImageConfig()).n or 1
-    elif spec.is_image():
+    elif image_operation == "image":
         media_usage["media_output_images"] = (req.image_config or ImageConfig()).n or 1
     elif spec.is_video():
         media_usage["media_output_seconds"] = (req.video_config or VideoConfig()).seconds or 6
     if media_usage:
         request.state.request_log_usage = media_usage
 
-    messages = [m.model_dump(exclude_none=True) for m in req.messages]
-
     try:
-        # Dispatch by model capability.
-        if spec.is_image_edit():
+        # Dispatch by model capability and whether the request carries images.
+        if image_operation == "image_edit":
             from .images import edit as img_edit
 
             cfg = req.image_config or ImageConfig()
@@ -680,7 +698,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
                 chat_format=True,
             )
 
-        elif spec.is_image():
+        elif image_operation == "image":
             from .images import generate as img_gen
 
             cfg = req.image_config or ImageConfig()
