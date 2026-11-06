@@ -33,6 +33,7 @@ from .schemas import (
     ResponsesCreateRequest,
 )
 from .chat import completions as chat_completions
+from .._sse_keepalive import keepalive_stream
 
 router = APIRouter(prefix="/v1")
 _POOL_ID_TO_NAME = {0: "basic", 1: "super", 2: "heavy"}
@@ -436,7 +437,7 @@ async def _chain_first_sse(
 
 async def _sse_response_or_error(stream: AsyncIterable[str]):
     """Return an SSE response, or an HTTP error before headers are sent."""
-    iterator = stream.__aiter__()
+    iterator = keepalive_stream(stream).__aiter__()
     try:
         first = await anext(iterator)
     except StopAsyncIteration:
@@ -788,7 +789,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest, request: Request
 async def _safe_sse_responses(stream) -> AsyncGenerator[str, None]:
     """SSE wrapper that converts errors to Responses API error events."""
     try:
-        async for chunk in stream:
+        async for chunk in keepalive_stream(stream):
             yield chunk
     except Exception as exc:
         from app.platform.errors import AppError

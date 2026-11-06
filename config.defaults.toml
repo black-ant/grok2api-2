@@ -203,6 +203,11 @@ max_inflight = 8
 timeout = 60
 # 只在连续没有语义生成事件时触发的流式空闲超时（秒）
 stream_idle_timeout = 60
+# 流式响应无数据时补发心跳注释的间隔（秒），0 表示关闭
+stream_keepalive = 15
+# 上游流未发出结束标记就断开时，是否作为错误上报（而不是补一个正常的结束）
+# 默认关闭：部分上游会在最后一个 token 后直接断开，开启前请确认上游总会发送结束标记
+require_stream_terminal = false
 
 
 # ==================== Console API ====================

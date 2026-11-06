@@ -13,6 +13,7 @@ from app.control.model import aliases as model_aliases
 from app.control.model.spec import ModelSpec
 from app.platform.auth.middleware import verify_api_key
 from app.platform.errors import AppError, ValidationError
+from app.products._sse_keepalive import keepalive_stream
 
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_api_key)])
@@ -77,7 +78,7 @@ class MessagesRequest(BaseModel):
 async def _safe_sse_anthropic(stream):
     """Wrap an Anthropic SSE stream, converting exceptions to error events."""
     try:
-        async for chunk in stream:
+        async for chunk in keepalive_stream(stream):
             yield chunk
     except AppError as exc:
         err = exc.to_dict()["error"]
