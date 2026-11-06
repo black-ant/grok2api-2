@@ -13,7 +13,7 @@ from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
 from app.platform.runtime.clock import now_ms
 from app.platform.runtime.ids import next_hex
-from .config import resolve_clearance_config
+from .config import normalize_legacy_http_proxy, resolve_clearance_config
 from .models import (
     EgressMode,
     ClearanceMode,
@@ -150,10 +150,18 @@ class ProxyDirectory:
         clearance_mode = ClearanceMode.parse(
             cfg.get_str("proxy.clearance.mode", "none")
         )
-        base_url = cfg.get_str("proxy.egress.proxy_url", "")
-        res_url = cfg.get_str("proxy.egress.resource_proxy_url", "")
-        base_pool = tuple(cfg.get_list("proxy.egress.proxy_pool", []))
-        res_pool = tuple(cfg.get_list("proxy.egress.resource_proxy_pool", []))
+        base_url = normalize_legacy_http_proxy(cfg.get_str("proxy.egress.proxy_url", ""))
+        res_url = normalize_legacy_http_proxy(
+            cfg.get_str("proxy.egress.resource_proxy_url", "")
+        )
+        base_pool = tuple(
+            normalize_legacy_http_proxy(value)
+            for value in cfg.get_list("proxy.egress.proxy_pool", [])
+        )
+        res_pool = tuple(
+            normalize_legacy_http_proxy(value)
+            for value in cfg.get_list("proxy.egress.resource_proxy_pool", [])
+        )
         if hasattr(cfg, 'get_bool'):
             clash_enabled = cfg.get_bool('proxy.clash.enabled', False)
         else:

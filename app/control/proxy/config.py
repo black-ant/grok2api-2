@@ -1,7 +1,9 @@
 """Proxy clearance config helpers shared by control and dataplane code."""
 
+import ipaddress
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from app.platform.config.snapshot import get_config
 
@@ -53,4 +55,40 @@ def resolve_clearance_config(cfg: Any | None = None) -> ClearanceConfig:
     )
 
 
-__all__ = ["ClearanceConfig", "first_config_str", "resolve_clearance_config"]
+def normalize_legacy_http_proxy(value: str) -> str:
+    """Rewrite the legacy ``host:port:user:password`` proxy form into a URL.
+
+    Providers commonly hand out that plain form. Anything that does not match
+    exactly (IPv4 host, numeric port, non-empty credentials) is returned
+    unchanged so every other format keeps working as before.
+    """
+    text = str(value or "")
+    parts = text.split(":", 3)
+    if len(parts) != 4:
+        return text
+    host, port_text, username, password = parts
+    if not username or not password:
+        return text
+    try:
+        if ipaddress.ip_address(host).version != 4:
+            return text
+    except ValueError:
+        return text
+    try:
+        port = int(port_text, 10)
+    except ValueError:
+        return text
+    if not 0 < port <= 65535:
+        return text
+    return (
+        f"http://{quote(username, safe='')}:{quote(password, safe='')}"
+        f"@{host}:{port}"
+    )
+
+
+__all__ = [
+    "ClearanceConfig",
+    "first_config_str",
+    "normalize_legacy_http_proxy",
+    "resolve_clearance_config",
+]
