@@ -21,6 +21,7 @@ class ResultCategory(IntEnum):
     UPSTREAM_5XX  = auto()
     TRANSPORT_ERR = auto()
     UNKNOWN       = auto()
+    REFUSAL       = auto()   # request-level content refusal (not an account fault)
 
 
 # ---------------------------------------------------------------------------

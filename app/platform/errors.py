@@ -125,8 +125,24 @@ class UpstreamResponseEmptyError(UpstreamError):
         self.code = "upstream_response_empty"
 
 
+class UpstreamStreamIncompleteError(UpstreamError):
+    """Upstream stream reached EOF without ever sending its terminal event.
+
+    Fabricating a normal finish for such a stream would make clients treat a
+    truncated answer as complete, so the failure is reported instead.
+    """
+
+    def __init__(self, protocol: str = "upstream") -> None:
+        super().__init__(
+            f"Upstream {protocol} stream ended before its terminal event",
+            status=502,
+        )
+        self.code = "upstream_stream_incomplete"
+
+
 __all__ = [
     "ErrorKind", "AppError", "parse_retry_after",
     "ValidationError", "AuthError", "RateLimitError",
     "UpstreamError", "StreamIdleTimeout", "UpstreamResponseEmptyError",
+    "UpstreamStreamIncompleteError",
 ]

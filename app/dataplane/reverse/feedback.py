@@ -24,6 +24,7 @@ def build_account_feedback(
     SUCCESS  → increment use_count, update last_use_at
     RATE_LIMITED → decrement quota for the mode
     AUTH_FAILURE → increment fail_count, set last_fail_reason
+    REFUSAL → no account counters (request-level content refusal)
     Others → increment fail_count
     """
     ts = now_ms()
@@ -34,6 +35,10 @@ def build_account_feedback(
             usage_use_delta=1,
             last_use_at=ts,
         )
+
+    if result.category == ResultCategory.REFUSAL:
+        # The account answered correctly; only the request content was rejected.
+        return AccountPatch(token=token)
 
     if result.category == ResultCategory.RATE_LIMITED:
         # Signal quota exhaustion for the specific mode.
@@ -68,6 +73,7 @@ _CATEGORY_TO_PROXY: dict[ResultCategory, ProxyFeedbackKind] = {
     ResultCategory.FORBIDDEN:     ProxyFeedbackKind.CHALLENGE,
     ResultCategory.UPSTREAM_5XX:  ProxyFeedbackKind.UPSTREAM_5XX,
     ResultCategory.TRANSPORT_ERR: ProxyFeedbackKind.TRANSPORT_ERROR,
+    ResultCategory.REFUSAL:       ProxyFeedbackKind.NEUTRAL,
 }
 
 

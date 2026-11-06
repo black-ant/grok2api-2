@@ -37,6 +37,7 @@ from app.dataplane.reverse.protocol.xai_console_chat import (
     build_console_payload,
     ConsoleStreamAdapter,
     raise_if_empty_console_response,
+    raise_if_incomplete_console_response,
     stream_console_chat,
 )
 from app.products._account_selection import reserve_account, selection_max_retries
@@ -248,6 +249,7 @@ async def completions(
                                 yield f"data: {orjson.dumps(chunk).decode()}\n\n"
 
                         raise_if_empty_console_response(adapter)
+                        raise_if_incomplete_console_response(adapter)
                         # 流结束，发送 final chunk
                         usage_data = adapter.usage
                         prompt_tokens = (
@@ -452,6 +454,7 @@ async def completions(
                     adapter.feed(event_type, data)
 
                 raise_if_empty_console_response(adapter)
+                raise_if_incomplete_console_response(adapter)
                 usage_data = adapter.usage
                 prompt_tokens = (
                     usage_data.get("input_tokens", 0) if usage_data else

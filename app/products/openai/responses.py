@@ -17,6 +17,7 @@ from app.control.model.registry import resolve as resolve_model
 from app.control.account.enums import FeedbackKind
 from app.dataplane.reverse.protocol.xai_chat import classify_line, StreamAdapter
 from app.products._account_selection import reserve_account, selection_max_retries
+from app.products._stream_guard import enforce_stream_terminal
 
 from .chat import _stream_chat, _extract_message, _resolve_image, _quota_sync, _fail_sync, _feedback_kind, _log_task_exception, _upstream_body_excerpt
 from .chat import _configured_retry_codes, _should_retry_upstream
@@ -308,6 +309,7 @@ async def create(
                     })
 
                     ended = False
+                    stream_completed = False
                     yield ": heartbeat\n\n"
                     async for line in _stream_chat(
                         token     = token,
@@ -321,6 +323,7 @@ async def create(
 
                         event_type, data = classify_line(line)
                         if event_type == "done":
+                            stream_completed = True
                             break
                         if event_type != "data" or not data:
                             continue
@@ -393,6 +396,7 @@ async def create(
                                         async for evt in _emit_fc_events(fc_items, base_idx):
                                             yield evt
                                         tool_calls_emitted = True
+                                        stream_completed = True
                                         ended = True
                                         break
                                     text_chunk = safe_text
@@ -442,11 +446,14 @@ async def create(
                                     })
 
                             elif ev.kind == "soft_stop":
+                                stream_completed = True
                                 ended = True
                                 break
 
                         if ended:
                             break
+
+                    enforce_stream_terminal(stream_completed, protocol="responses")
 
                     # Flush sieve after stream ends (incomplete XML at end of stream)
                     if sieve is not None and not tool_calls_emitted:
@@ -642,6 +649,7 @@ async def create(
 
         try:
             try:
+                stream_completed = False
                 async for line in _stream_chat(
                     token     = token,
                     mode_id   = ModeId(selected_mode_id),
@@ -651,16 +659,19 @@ async def create(
                 ):
                     event_type, data = classify_line(line)
                     if event_type == "done":
+                        stream_completed = True
                         break
                     if event_type != "data" or not data:
                         continue
                     ended = False
                     for ev in adapter.feed(data):
                         if ev.kind == "soft_stop":
+                            stream_completed = True
                             ended = True
                             break
                     if ended:
                         break
+                enforce_stream_terminal(stream_completed, protocol="responses")
                 success = True
 
             except UpstreamError as exc:

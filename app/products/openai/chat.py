@@ -44,7 +44,10 @@ from app.dataplane.reverse.protocol.xai_chat import (
     classify_line,
     StreamAdapter,
 )
-from app.dataplane.reverse.protocol.xai_usage import is_invalid_credentials_error
+from app.dataplane.reverse.protocol.xai_usage import (
+    is_content_refusal_error,
+    is_invalid_credentials_error,
+)
 from app.dataplane.reverse.runtime.endpoint_table import CHAT
 from app.dataplane.reverse.transport.asset_upload import upload_from_input
 from app.dataplane.reverse.transport.semantic_idle import (
@@ -77,6 +80,7 @@ from app.products._model_fallback import (
     max_cooldown_seconds,
 )
 from app.products._routing import RoutingSession
+from app.products._stream_guard import enforce_stream_terminal
 
 
 def _to_chat_annotations(anns: list[dict]) -> list[dict]:
@@ -204,6 +208,9 @@ def _configured_retry_codes(cfg) -> frozenset[int]:
 
 def _should_retry_upstream(exc: UpstreamError, retry_codes: frozenset[int]) -> bool:
     """Return whether this upstream error should switch to another token."""
+    if is_content_refusal_error(exc):
+        # A refusal is deterministic for the request: another account cannot help.
+        return False
     return (
         exc.code == "upstream_response_empty"
         or exc.status in retry_codes
@@ -680,6 +687,7 @@ async def completions(
                 try:
                     try:
                         ended = False
+                        stream_completed = False
                         sieve = ToolSieve(tool_names)
                         tool_calls_emitted = False
                         stream_kwargs = {
@@ -696,6 +704,7 @@ async def completions(
                         async for line in _stream_chat(**stream_kwargs):
                             event_type, data = classify_line(line)
                             if event_type == "done":
+                                stream_completed = True
                                 break
                             if event_type != "data" or not data:
                                 continue
@@ -733,6 +742,7 @@ async def completions(
                                             stream_started = True
                                             yield "data: [DONE]\n\n"
                                             tool_calls_emitted = True
+                                            stream_completed = True
                                             success = True
                                             logger.info(
                                                 "chat stream tool_calls: attempt={}/{} model={} call_count={}",
@@ -758,10 +768,13 @@ async def completions(
                                 elif ev.kind == "annotation" and ev.annotation_data:
                                     collected_annotations.append(ev.annotation_data)
                                 elif ev.kind == "soft_stop":
+                                    stream_completed = True
                                     ended = True
                                     break
                             if ended:
                                 break
+
+                        enforce_stream_terminal(stream_completed, protocol="chat")
 
                         if not tool_calls_emitted and tool_names:
                             # Stream ended — flush sieve for any buffered XML
@@ -1022,19 +1035,23 @@ async def completions(
                 }
                 if proxy_lease is not None:
                     stream_kwargs["proxy_lease"] = proxy_lease
+                stream_completed = False
                 async for line in _stream_chat(**stream_kwargs):
                     event_type, data = classify_line(line)
                     if event_type == "done":
+                        stream_completed = True
                         break
                     if event_type != "data" or not data:
                         continue
                     ended = False
                     for ev in adapter.feed(data):
                         if ev.kind == "soft_stop":
+                            stream_completed = True
                             ended = True
                             break
                     if ended:
                         break
+                enforce_stream_terminal(stream_completed, protocol="chat")
                 success = True
 
             except UpstreamError as exc:

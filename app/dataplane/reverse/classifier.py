@@ -5,7 +5,10 @@ Maps upstream HTTP status codes and response bodies to a ResultCategory.
 
 from typing import Any
 
-from app.dataplane.reverse.protocol.xai_usage import is_invalid_credentials_body
+from app.dataplane.reverse.protocol.xai_usage import (
+    is_content_refusal_body,
+    is_invalid_credentials_body,
+)
 
 from .types import ResultCategory
 
@@ -37,6 +40,9 @@ def classify_result(
         # Known blocked/invalid account markers take precedence.
         if is_invalid_credentials_body(body):
             return ResultCategory.AUTH_FAILURE
+        # Content refusals are request-level: no account or proxy fault.
+        if is_content_refusal_body(body):
+            return ResultCategory.REFUSAL
         # Check if the body indicates a Cloudflare challenge.
         if body and ("cf-challenge" in body.lower() or "cloudflare" in body.lower()):
             return ResultCategory.FORBIDDEN

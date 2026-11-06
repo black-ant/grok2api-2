@@ -507,6 +507,13 @@ class AccountRefreshService:
                     record, exc
                 ):
                     return
+                from app.dataplane.reverse.protocol.xai_usage import (
+                    is_content_refusal_error,
+                )
+
+                if is_content_refusal_error(exc):
+                    # The account worked; only the request content was refused.
+                    return
                 if (
                     record is not None
                     and getattr(exc, 'status', None) == 429

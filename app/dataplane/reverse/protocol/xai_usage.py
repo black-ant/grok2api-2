@@ -359,6 +359,33 @@ def is_invalid_credentials_error(exc: BaseException) -> bool:
     return is_invalid_credentials_body(str(exc.details.get("body", "") or ""))
 
 
+# Request-level content refusals. They arrive as 403 with an account-independent
+# body, e.g. {"code":"permission-denied","error":"I'm sorry, I can't help with
+# that request."}. Retrying them on another account cannot succeed, so they must
+# never be treated as an account, proxy or transport fault.
+_REFUSAL_MARKERS = (
+    "content violates usage guidelines",
+    "safety_check_type_",
+    "i can't help with that request",
+    "i cannot help with that request",
+)
+
+
+def is_content_refusal_body(body: str) -> bool:
+    """Return whether *body* carries a request-level content refusal."""
+    text = str(body or "").lower().replace("\u2019", "'")
+    return any(marker in text for marker in _REFUSAL_MARKERS)
+
+
+def is_content_refusal_error(exc: BaseException) -> bool:
+    """Return whether *exc* is a content refusal rather than an account fault."""
+    if not isinstance(exc, UpstreamError):
+        return False
+    if exc.status != 403:
+        return False
+    return is_content_refusal_body(str(exc.details.get("body", "") or ""))
+
+
 def _proxy_feedback_kind_for_error(
     exc: BaseException,
     *,
@@ -370,6 +397,10 @@ def _proxy_feedback_kind_for_error(
     # Invalid or blocked accounts are account problems, not proxy problems.
     if is_invalid_credentials_error(exc):
         return ProxyFeedbackKind.FORBIDDEN
+
+    # A content refusal is a request outcome: leave proxy state untouched.
+    if is_content_refusal_error(exc):
+        return ProxyFeedbackKind.NEUTRAL
 
     if status == 429:
         return ProxyFeedbackKind.RATE_LIMITED
@@ -388,6 +419,8 @@ __all__ = [
     "fetch_mode_quota",
     "is_invalid_credentials_body",
     "is_invalid_credentials_error",
+    "is_content_refusal_body",
+    "is_content_refusal_error",
     'parse_imagine_quota',
     'fetch_imagine_quota_group',
 ]

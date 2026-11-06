@@ -37,6 +37,7 @@ from app.platform.errors import (
     StreamIdleTimeout,
     UpstreamError,
     UpstreamResponseEmptyError,
+    UpstreamStreamIncompleteError,
     parse_retry_after,
 )
 from app.platform.config.snapshot import get_config
@@ -266,6 +267,7 @@ class ConsoleStreamAdapter:
         "text_buf",
         "usage",
         "_done",
+        "_terminal_seen",
         "_output_item_types",
         "_non_text_event_types",
     )
@@ -274,6 +276,7 @@ class ConsoleStreamAdapter:
         self.text_buf: list[str] = []
         self.usage: dict[str, Any] | None = None
         self._done = False
+        self._terminal_seen = False
         self._output_item_types: set[str] = set()
         self._non_text_event_types: set[str] = set()
 
@@ -335,6 +338,16 @@ class ConsoleStreamAdapter:
             resp = obj.get("response", {})
             self.usage = resp.get("usage")
             self._done = True
+            self._terminal_seen = True
+
+        elif event_type in {
+            "response.incomplete",
+            "response.failed",
+        }:
+            # Both are protocol terminals; whether they carry usable output is
+            # decided by the empty-response guard, not by truncation detection.
+            self._terminal_seen = True
+            self._done = True
 
         elif event_type == "error":
             msg = obj.get("message") or str(obj)
@@ -358,10 +371,22 @@ class ConsoleStreamAdapter:
     def is_empty_response(self) -> bool:
         return not self.full_text and not self.has_non_text_output
 
+    @property
+    def terminal_seen(self) -> bool:
+        """Whether the upstream sent a terminal event (completed/incomplete/failed)."""
+        return self._terminal_seen
+
 
 def raise_if_empty_console_response(adapter: ConsoleStreamAdapter) -> None:
     if adapter.is_empty_response:
         raise UpstreamResponseEmptyError()
+
+
+def raise_if_incomplete_console_response(adapter: ConsoleStreamAdapter) -> None:
+    """Reject a stream that produced output but never reached a terminal event."""
+    if adapter.terminal_seen or adapter.is_empty_response:
+        return
+    raise UpstreamStreamIncompleteError("console")
 
 
 def classify_console_line(line: str) -> tuple[str, str]:
@@ -429,7 +454,7 @@ async def stream_console_chat(
                 body = response.content.decode("utf-8", "replace")[:400]
             except Exception:
                 body = ""
-            await proxy.feedback(lease, _status_feedback(response.status_code))
+            await proxy.feedback(lease, _status_feedback(response.status_code, body))
             raise UpstreamError(
                 f"Console API returned {response.status_code}",
                 status=response.status_code,
@@ -483,8 +508,13 @@ def _transport_error_feedback():
     from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind
     return ProxyFeedback(kind=ProxyFeedbackKind.TRANSPORT_ERROR)
 
-def _status_feedback(status: int):
+def _status_feedback(status: int, body: str = ""):
     from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind
+    from app.dataplane.reverse.protocol.xai_usage import is_content_refusal_body
+
+    if is_content_refusal_body(body):
+        # Request-level refusal: neither the account nor the egress is at fault.
+        return ProxyFeedback(kind=ProxyFeedbackKind.NEUTRAL, status_code=status)
     if status == 403:
         kind = ProxyFeedbackKind.CHALLENGE
     elif status == 429:
@@ -501,6 +531,7 @@ __all__ = [
     "build_console_payload",
     "ConsoleStreamAdapter",
     "raise_if_empty_console_response",
+    "raise_if_incomplete_console_response",
     "classify_console_line",
     "stream_console_chat",
 ]

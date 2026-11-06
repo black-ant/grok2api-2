@@ -380,6 +380,8 @@ class ConsoleModelFallbackTests(unittest.IsolatedAsyncioTestCase):
         async def fake_stream(token, payload, timeout_s):
             calls.append((token, payload["model"]))
             yield "response.output_text.delta", '{"delta":"ok"}'
+            # Console streams always terminate with response.completed.
+            yield "response.completed", '{"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}'
 
         async def fake_reserve(*_args, **_kwargs):
             return next(accounts), 5

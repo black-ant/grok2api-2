@@ -60,6 +60,7 @@ class ProxyFeedbackKind(StrEnum):
     RATE_LIMITED    = "rate_limited" # 429
     UPSTREAM_5XX    = "upstream_5xx"
     TRANSPORT_ERROR = "transport_error"
+    NEUTRAL         = "neutral"      # request-level outcome — no proxy action
 
 
 class EgressNode(BaseModel):

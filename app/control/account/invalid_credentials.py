@@ -65,10 +65,17 @@ def feedback_kind_for_error(exc: BaseException | None) -> FeedbackKind:
     # the generic status-code mapping so that e.g. a 403 with "blocked-user"
     # body is treated as an account-level credential failure, not a generic
     # FORBIDDEN that only lowers health.
-    from app.dataplane.reverse.protocol.xai_usage import is_invalid_credentials_error
+    from app.dataplane.reverse.protocol.xai_usage import (
+        is_content_refusal_error,
+        is_invalid_credentials_error,
+    )
 
     if is_invalid_credentials_error(exc):
         return FeedbackKind.UNAUTHORIZED
+    # A content refusal is a request-level outcome; blaming the account would
+    # demote healthy accounts and trigger pointless rotation.
+    if is_content_refusal_error(exc):
+        return FeedbackKind.REFUSED
     status = getattr(exc, "status", 0)
     if status == 429:
         return FeedbackKind.RATE_LIMITED

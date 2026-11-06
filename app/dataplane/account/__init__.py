@@ -307,6 +307,11 @@ class AccountDirectory:
         if idx is None:
             return
 
+        # Request-level content refusals say nothing about account health:
+        # touching the slot would wrongly demote a healthy account.
+        if kind == FeedbackKind.REFUSED:
+            return
+
         ts = now_s_val if now_s_val is not None else now_s()
 
         strategy = current_strategy()
