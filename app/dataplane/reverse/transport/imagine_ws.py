@@ -91,6 +91,24 @@ async def _probe_ws_closed(ws: aiohttp.ClientWebSocketResponse, wait_s: float) -
         return True
 
 
+_REQUEST_ID_KEYS = ("requestId", "request_id", "req_id", "reqId")
+
+
+def _frame_request_id(msg: dict[str, Any]) -> str:
+    """Return the request id echoed on a frame ("" when the frame has none)."""
+    for key in _REQUEST_ID_KEYS:
+        value = msg.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    item = msg.get("item")
+    if isinstance(item, dict):
+        for key in ("requestId", "request_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Single-round generator
 # ---------------------------------------------------------------------------
@@ -127,6 +145,11 @@ async def _stream_round(
     slots:           dict[str, _Slot] = {}
     round_completed: int               = 0
     round_start                        = time.monotonic()
+    # A reused connection can still deliver frames from the previous round.
+    # Upstream echoes the request id on frames once it supports attribution; until
+    # the first id-bearing frame arrives we keep accepting id-less frames so an
+    # upstream that never sends ids keeps working.
+    attributed:      bool              = False
 
     while True:
         elapsed = time.monotonic() - round_start
@@ -164,6 +187,25 @@ async def _stream_round(
                 continue
 
             msg_type = msg.get("type")
+
+            # Drop frames that belong to another round on this connection.
+            if msg_type in ("json", "image"):
+                frame_id = _frame_request_id(msg)
+                if frame_id:
+                    if frame_id != request_id:
+                        logger.debug(
+                            "imagine frame from another round dropped: image_id={} request_id={}...",
+                            str(msg.get("image_id") or msg.get("id") or "")[:8],
+                            frame_id[:8],
+                        )
+                        continue
+                    attributed = True
+                elif attributed:
+                    logger.debug(
+                        "imagine frame without request id dropped after attribution: image_id={}",
+                        str(msg.get("image_id") or msg.get("id") or "")[:8],
+                    )
+                    continue
 
             # JSON control frames (start_stage / completed)
             if msg_type == "json":
