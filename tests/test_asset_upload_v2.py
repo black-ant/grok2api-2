@@ -182,6 +182,26 @@ class AssetUploadV2Tests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("rejected upstream", raised.exception.message)
+        self.assertIn("moderated", raised.exception.message)
+        self.assertEqual(raised.exception.status, 502)
+
+    async def test_terminal_error_string_reason_is_surfaced(self):
+        proxy = _FakeProxy()
+        _FakeSession.responses = [
+            _FakeResponse(
+                200,
+                b'{"terminalError":"Image dimensions are insufficient"}',
+            )
+        ]
+        patches, _header_calls = self._patch_upload(proxy)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with self.assertRaises(UpstreamError) as raised:
+                await asset_upload.upload_file(
+                    "token", "reference.png", "image/png", _PNG_B64
+                )
+
+        self.assertIn("dimensions are insufficient", raised.exception.message)
+        self.assertEqual(raised.exception.status, 502)
 
     async def test_missing_file_reference_is_reported(self):
         proxy = _FakeProxy()
@@ -194,6 +214,7 @@ class AssetUploadV2Tests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("no file reference", raised.exception.message)
+        self.assertEqual(raised.exception.status, 502)
 
     def test_upload_form_carries_file_source_part(self):
         form = asset_upload._build_upload_form(

@@ -242,24 +242,45 @@ def _build_upload_form(
     return form
 
 
+def _terminal_error_text(terminal: object) -> str:
+    """Flatten a v2 terminal error into one readable line."""
+    if isinstance(terminal, dict):
+        for key in ("message", "error", "code", "reason"):
+            value = str(terminal.get(key) or "").strip()
+            if value:
+                return value[:160]
+        return ""
+    if isinstance(terminal, str):
+        return terminal.strip()[:160]
+    return ""
+
+
 def _parse_upload_response(body_bytes: bytes) -> tuple[str, str]:
-    """Return ``(file_id, file_uri)`` from an upload-file-v2 response."""
+    """Return ``(file_id, file_uri)`` from an upload-file-v2 response.
+
+    A 2xx status only means the gateway accepted the request; the body still has
+    to carry a file reference. Every other shape is reported as a 502 so the
+    client sees a failed upload instead of a successful response with an error
+    object inside.
+    """
     try:
         result = orjson.loads(body_bytes)
     except orjson.JSONDecodeError as exc:
         raise UpstreamError(
             "Asset upload response was not valid JSON",
-            status = 200,
+            status = 502,
             body   = body_bytes.decode("utf-8", "replace")[:300],
         ) from exc
     if not isinstance(result, dict):
-        raise UpstreamError("Asset upload response was not an object", status=200)
+        raise UpstreamError("Asset upload response was not an object", status=502)
 
     terminal = result.get("terminalError")
     if terminal not in (None, "", False, 0, {}, []):
+        reason = _terminal_error_text(terminal)
         raise UpstreamError(
-            "Asset upload was rejected upstream",
-            status = 200,
+            f"Asset upload was rejected upstream: {reason}" if reason
+            else "Asset upload was rejected upstream",
+            status = 502,
             body   = orjson.dumps(terminal).decode("utf-8", "replace")[:300],
         )
 
@@ -276,7 +297,7 @@ def _parse_upload_response(body_bytes: bytes) -> tuple[str, str]:
     )
     file_uri = str(metadata.get("fileUri") or result.get("fileUri") or "")
     if not file_id and not file_uri:
-        raise UpstreamError("Asset upload returned no file reference", status=200)
+        raise UpstreamError("Asset upload returned no file reference", status=502)
     return file_id, file_uri
 
 
