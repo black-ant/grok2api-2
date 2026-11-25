@@ -16,7 +16,7 @@ CONSOLE_BASE = "https://console.x.ai"
 CHAT              = f"{BASE}/rest/app-chat/conversations/new"
 
 # ── Asset management ─────────────────────────────────────────────────────
-ASSETS_UPLOAD     = f"{BASE}/rest/app-chat/upload-file"        # POST (base64 upload)
+ASSETS_UPLOAD     = f"{BASE}/http/upload-file-v2/direct"      # POST (multipart + file_source)
 ASSETS_LIST       = f"{BASE}/rest/assets"                      # GET
 ASSETS_DELETE     = f"{BASE}/rest/assets-metadata"             # DELETE /{asset_id}
 ASSETS_DOWNLOAD   = ASSETS_CDN                                 # GET /{path}

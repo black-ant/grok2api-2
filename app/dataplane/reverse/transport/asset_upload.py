@@ -1,7 +1,10 @@
-"""Asset upload transport — direct base64 upload to Grok.
+"""Asset upload transport — multipart upload to Grok.
 
-Calls POST /rest/app-chat/upload-file with base64-encoded content and
-returns the file metadata ID used as a file attachment reference in chat.
+Calls POST ``/http/upload-file-v2/direct`` with a multipart body and returns
+the file metadata ID used as a file attachment reference in chat and
+image-edit. The legacy base64 ``/rest/app-chat/upload-file`` endpoint is gone:
+grok.com rejects it before the application layer answers, which surfaces as a
+bare 403 with an empty body.
 """
 
 import asyncio
@@ -15,6 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import orjson
+from curl_cffi import CurlMime
 
 from app.platform.logging.logger import logger
 from app.platform.config.snapshot import get_config
@@ -27,8 +31,13 @@ from app.dataplane.reverse.protocol.xai_assets import resolve_asset_reference
 from app.control.proxy.feedback import build_feedback
 from app.control.proxy.models import ProxyFeedback, ProxyFeedbackKind
 
-_UPLOAD_URL = "https://grok.com/rest/app-chat/upload-file"
+_UPLOAD_URL = "https://grok.com/http/upload-file-v2/direct"
+# Imagine image-edit uploads must declare where the browser started them; the
+# chat flow sends no file_source at all, matching the web client.
+FILE_SOURCE_IMAGINE_SELF = "IMAGINE_SELF_UPLOAD_FILE_SOURCE"
+IMAGINE_REFERER = "https://grok.com/imagine"
 _X_USER_ID_RE = re.compile(r"(?:^|;\s*)x-userid=([^;]+)")
+_FILENAME_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _DEFAULT_INPUT_MAX_BYTES = 20 * 1024 * 1024
 _DEFAULT_INPUT_TIMEOUT_S = 30.0
 _DEFAULT_MAX_REDIRECTS = 5
@@ -194,19 +203,101 @@ def parse_data_uri(data_uri: str) -> tuple[str, str, str]:
 # Core upload function
 # ---------------------------------------------------------------------------
 
+def _is_challenge_403(exc: UpstreamError) -> bool:
+    """Tell a browser-session challenge apart from a policy rejection.
+
+    grok.com answers an unusable browser session with 403 before the
+    application layer is built: the body is empty or a Cloudflare HTML page.
+    Structured JSON 403s are policy decisions and must not be replayed.
+    """
+    if exc.status != 403:
+        return False
+    body = str(exc.details.get("body") or "").strip()
+    if not body:
+        return True
+    head = body[:400].lower()
+    return body.startswith("<") or "just a moment" in head or "<html" in head
+
+
+def _safe_filename(filename: str) -> str:
+    cleaned = _FILENAME_CONTROL_RE.sub("_", filename or "").strip()
+    return cleaned or "upload.bin"
+
+
+def _build_upload_form(
+    filename:    str,
+    mime:        str,
+    raw:         bytes,
+    file_source: str | None,
+) -> CurlMime:
+    form = CurlMime()
+    form.addpart(
+        name         = "file",
+        content_type = mime,
+        filename     = _safe_filename(filename),
+        data         = raw,
+    )
+    if file_source:
+        form.addpart(name="file_source", data=file_source.encode("utf-8"))
+    return form
+
+
+def _parse_upload_response(body_bytes: bytes) -> tuple[str, str]:
+    """Return ``(file_id, file_uri)`` from an upload-file-v2 response."""
+    try:
+        result = orjson.loads(body_bytes)
+    except orjson.JSONDecodeError as exc:
+        raise UpstreamError(
+            "Asset upload response was not valid JSON",
+            status = 200,
+            body   = body_bytes.decode("utf-8", "replace")[:300],
+        ) from exc
+    if not isinstance(result, dict):
+        raise UpstreamError("Asset upload response was not an object", status=200)
+
+    terminal = result.get("terminalError")
+    if terminal not in (None, "", False, 0, {}, []):
+        raise UpstreamError(
+            "Asset upload was rejected upstream",
+            status = 200,
+            body   = orjson.dumps(terminal).decode("utf-8", "replace")[:300],
+        )
+
+    metadata = result.get("fileMetadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    # fileMetadataId is what image-edit needs; chat also accepts the upload task
+    # id when the metadata record is still being built asynchronously.
+    file_id = (
+        str(metadata.get("fileMetadataId") or "")
+        or str(metadata.get("fileId") or "")
+        or str(result.get("uploadId") or "")
+        or str(result.get("fileMetadataId") or "")
+    )
+    file_uri = str(metadata.get("fileUri") or result.get("fileUri") or "")
+    if not file_id and not file_uri:
+        raise UpstreamError("Asset upload returned no file reference", status=200)
+    return file_id, file_uri
+
+
 async def upload_file(
-    token:    str,
-    filename: str,
-    mime:     str,
-    b64:      str,
+    token:       str,
+    filename:    str,
+    mime:        str,
+    b64:         str,
+    *,
+    file_source: str | None = None,
+    referer:     str | None = None,
 ) -> tuple[str, str]:
     """Upload base64-encoded file content to Grok.
 
     Args:
-        token:    SSO session token.
-        filename: Original file name (used for content-type inference).
-        mime:     MIME type string (e.g. ``"image/png"``).
-        b64:      Base64-encoded file content (no data-URI prefix).
+        token:       SSO session token.
+        filename:    Original file name (sent to upstream as the part name).
+        mime:        MIME type string (e.g. ``"image/png"``).
+        b64:         Base64-encoded file content (no data-URI prefix).
+        file_source: Upload flow tag; chat uploads leave it empty.
+        referer:     Page the upload was started from (image-edit uses ``/imagine``).
 
     Returns:
         ``(file_id, file_uri)`` — file_id is used as a file attachment ref.
@@ -215,18 +306,38 @@ async def upload_file(
         ``UpstreamError`` on HTTP failure.
     """
     try:
-        _validate_decoded_size(len(base64.b64decode(b64, validate=True)))
+        raw = base64.b64decode(b64, validate=True)
     except (ValueError, TypeError, binascii.Error) as exc:
         raise ValidationError("File input payload is not valid base64", param="content") from exc
+    _validate_decoded_size(len(raw))
+
     async with _get_upload_sem():
-        return await _upload_file_inner(token, filename, mime, b64)
+        try:
+            return await _upload_file_inner(
+                token, filename, mime, raw, file_source, referer
+            )
+        except UpstreamError as exc:
+            if not _is_challenge_403(exc):
+                raise
+            # The failed attempt already invalidated the clearance bundle and
+            # rotated the egress node through proxy feedback, so one retry runs
+            # on a fresh browser session instead of the rejected one.
+            logger.warning(
+                "asset upload hit a challenge 403; retrying with a fresh lease: filename={!r}",
+                filename,
+            )
+            return await _upload_file_inner(
+                token, filename, mime, raw, file_source, referer
+            )
 
 
 async def _upload_file_inner(
-    token:    str,
-    filename: str,
-    mime:     str,
-    b64:      str,
+    token:       str,
+    filename:    str,
+    mime:        str,
+    raw:         bytes,
+    file_source: str | None,
+    referer:     str | None,
 ) -> tuple[str, str]:
     cfg       = get_config()
     timeout_s = cfg.get_float("asset.upload_timeout", 60.0)
@@ -234,52 +345,27 @@ async def _upload_file_inner(
     proxy = await get_proxy_runtime()
     lease = await proxy.acquire()
 
-    payload = orjson.dumps({
-        "fileName":     filename,
-        "fileMimeType": mime,
-        "content":      b64,
-    })
-    headers = build_http_headers(token, lease=lease)
-    kwargs  = build_session_kwargs(lease=lease)
+    headers = build_http_headers(token, referer=referer, lease=lease)
+    # The multipart body supplies its own Content-Type with the boundary, and
+    # grok.com rejects the upload when the legacy request id header is present.
+    headers.pop("Content-Type", None)
+    headers.pop("x-xai-request-id", None)
+    headers["Cache-Control"] = "no-cache"
+    headers["Pragma"]        = "no-cache"
+    kwargs = build_session_kwargs(lease=lease)
 
+    form = _build_upload_form(filename, mime, raw, file_source)
     try:
-        async with ResettableSession(**kwargs) as session:
-            response = await session.post(
-                _UPLOAD_URL,
-                headers = headers,
-                data    = payload,
-                timeout = timeout_s,
-            )
-
-        body_bytes = response.content
-        if response.status_code != 200:
-            body_text = body_bytes.decode("utf-8", "replace")[:300]
-            logger.error(
-                "asset upload request failed: status={} body={}",
-                response.status_code, body_text,
-            )
-            is_cloudflare = "just a moment" in body_text.lower()
-            await proxy.feedback(
-                lease,
-                build_feedback(response.status_code, is_cloudflare=is_cloudflare),
-            )
-            raise UpstreamError(
-                f"Asset upload returned {response.status_code}",
-                status = response.status_code,
-                body   = body_text,
-            )
-
-        await proxy.feedback(
-            lease,
-            ProxyFeedback(kind=ProxyFeedbackKind.SUCCESS, status_code=200),
-        )
-
-        result   = orjson.loads(body_bytes)
-        file_id  = result.get("fileMetadataId") or result.get("fileId", "")
-        file_uri = result.get("fileUri", "")
-        logger.info("asset upload completed: filename={!r} file_id={}", filename, file_id)
-        return file_id, file_uri
-
+        try:
+            async with ResettableSession(**kwargs) as session:
+                response = await session.post(
+                    _UPLOAD_URL,
+                    headers   = headers,
+                    multipart = form,
+                    timeout   = timeout_s,
+                )
+        finally:
+            form.close()
     except UpstreamError:
         raise
     except Exception as exc:
@@ -289,12 +375,41 @@ async def _upload_file_inner(
         )
         raise UpstreamError(f"Asset upload transport error: {exc}") from exc
 
+    body_bytes = response.content
+    if not 200 <= response.status_code < 300:
+        body_text = body_bytes.decode("utf-8", "replace")[:300]
+        logger.error(
+            "asset upload request failed: status={} body={}",
+            response.status_code, body_text,
+        )
+        is_cloudflare = "just a moment" in body_text.lower()
+        await proxy.feedback(
+            lease,
+            build_feedback(response.status_code, is_cloudflare=is_cloudflare),
+        )
+        raise UpstreamError(
+            f"Asset upload returned {response.status_code}",
+            status = response.status_code,
+            body   = body_text,
+        )
+
+    await proxy.feedback(
+        lease,
+        ProxyFeedback(kind=ProxyFeedbackKind.SUCCESS, status_code=response.status_code),
+    )
+
+    file_id, file_uri = _parse_upload_response(body_bytes)
+    logger.info("asset upload completed: filename={!r} file_id={}", filename, file_id)
+    return file_id, file_uri
+
 
 async def upload_from_input(
     token: str,
     file_input: str,
     *,
     allowed_mime_prefixes: tuple[str, ...] | None = None,
+    file_source: str | None = None,
+    referer: str | None = None,
 ) -> tuple[str, str]:
     """High-level helper: parse *file_input* (URL or data URI) and upload.
 
@@ -362,7 +477,14 @@ async def upload_from_input(
 
                 await proxy.feedback(lease, ProxyFeedback(kind=ProxyFeedbackKind.SUCCESS))
                 lease_reported = True
-                return await upload_file(token, filename, mime, b64)
+                return await upload_file(
+                    token,
+                    filename,
+                    mime,
+                    b64,
+                    file_source=file_source,
+                    referer=referer,
+                )
 
             raise ValidationError("Input URL has too many redirects", param="content")
         except ValidationError:
@@ -391,7 +513,9 @@ async def upload_from_input(
     # Data URI
     filename, b64, mime = parse_data_uri(file_input)
     mime = _validate_mime(mime, filename, allowed_mime_prefixes)
-    return await upload_file(token, filename, mime, b64)
+    return await upload_file(
+        token, filename, mime, b64, file_source=file_source, referer=referer
+    )
 
 
 def resolve_uploaded_asset_reference(token: str, file_id: str, file_uri: str) -> str:
@@ -412,6 +536,8 @@ def _extract_user_id(token: str) -> str | None:
 
 
 __all__ = [
+    "FILE_SOURCE_IMAGINE_SELF",
+    "IMAGINE_REFERER",
     "upload_file",
     "upload_from_input",
     "parse_data_uri",

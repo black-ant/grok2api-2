@@ -43,6 +43,8 @@ from app.dataplane.reverse.protocol.xai_assets import (
 from app.dataplane.reverse.protocol.xai_chat import classify_line, raise_for_stream_error
 from app.dataplane.reverse.runtime.endpoint_table import CHAT
 from app.dataplane.reverse.transport.asset_upload import (
+    FILE_SOURCE_IMAGINE_SELF,
+    IMAGINE_REFERER,
     resolve_uploaded_asset_reference,
     upload_from_input,
 )
@@ -491,6 +493,8 @@ async def _prepare_video_reference(
                 token,
                 image_input,
                 allowed_mime_prefixes=("image/",),
+                file_source=FILE_SOURCE_IMAGINE_SELF,
+                referer=IMAGINE_REFERER,
             )
             content_url = resolve_uploaded_asset_reference(
                 token, uploaded_file_id, uploaded_file_uri

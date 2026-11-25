@@ -17,7 +17,7 @@ ASSETS_DELETE_URL    = "https://grok.com/rest/assets-metadata"   # append /{asse
 ASSETS_DOWNLOAD_BASE = "https://assets.grok.com"
 
 # app-chat file management (used by asset_upload.py).
-APP_CHAT_UPLOAD_URL = "https://grok.com/rest/app-chat/upload-file"
+APP_CHAT_UPLOAD_URL = "https://grok.com/http/upload-file-v2/direct"
 
 # MIME type mapping used for download content-type inference.
 _EXTENSION_MIME: dict[str, str] = {

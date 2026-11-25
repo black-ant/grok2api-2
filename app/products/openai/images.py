@@ -38,6 +38,8 @@ from app.dataplane.reverse.protocol.xai_image_edit import (
 )
 from app.dataplane.reverse.transport.assets import download_asset
 from app.dataplane.reverse.transport.asset_upload import (
+    FILE_SOURCE_IMAGINE_SELF,
+    IMAGINE_REFERER,
     resolve_uploaded_asset_reference,
     upload_from_input,
 )
@@ -783,6 +785,8 @@ async def _prepare_edit_reference(
             token,
             image_input,
             allowed_mime_prefixes=("image/",),
+            file_source=FILE_SOURCE_IMAGINE_SELF,
+            referer=IMAGINE_REFERER,
         )
         return _EditReference(
             file_id=file_id,

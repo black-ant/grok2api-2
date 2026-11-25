@@ -80,6 +80,17 @@
 - Go Console quota reconciliation、Build credential refresh、Build bot-risk、provider gateway。
 - Go frontend/admin 页面改动；当前 Python 管理端结构和页面职责不同。
 
+## 2026-11-25 上传协议批次
+
+图片附件上传稳定返回 403，根因是本地仍走旧的 base64 上传端点，而 grok.com 网页端已切到 multipart 直传：
+
+| 事项 | 落地位置 | 结论 |
+| --- | --- | --- |
+| 上传端点与请求体 | `asset_upload._UPLOAD_URL` 改为 `/http/upload-file-v2/direct`，正文改为 multipart（`file` + 可选 `file_source`），去掉 JSON `Content-Type` 与 `x-xai-request-id` | 旧端点 `POST /rest/app-chat/upload-file` 在应用层之前就被网关挡掉，返回空正文 403；远程 `2a1d6cfe`（2026-07-28）已改为 v2 直传 |
+| 图片编辑上传标识 | 图片/视频参考图上传带 `file_source=IMAGINE_SELF_UPLOAD_FILE_SOURCE` 与 `Referer: https://grok.com/imagine` | 对话附件不带 `file_source`，与远程 `attachments.go` 一致；`image_edit_upload` 只是远程的日志阶段名，不是上传字段 |
+| 响应解析 | `_parse_upload_response` 依次读取 `fileMetadata.fileMetadataId`、`fileId`、`uploadId`，并识别 `terminalError` | 旧实现只读顶层 `fileMetadataId`，v2 响应取不到标识 |
+| 挑战 403 重试 | `_is_challenge_403` 判定后重试一次；空正文或 HTML 正文视为浏览器会话被挑战 | 对应远程 `ba975f8c`（2026-08-16）；结构化 JSON 403 是策略拒绝，不重放 |
+
 ## 2026-11-06 本地可靠性批次
 
 本轮按“用户可感知 + 改动成本”排序，落地此前登记的待移植项与自查缺口，均为 Python 侧改造：
